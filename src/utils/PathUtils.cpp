@@ -2,8 +2,8 @@
 #include <QRegularExpression>
 
 QString PathUtils::sanitizeFileName(const QString &raw) {
-    // Percent-decode first to handle RFC 5987 / URL encoded names (e.g. %2F -> /)
-    QString name = QUrl::fromPercentEncoding(raw.toUtf8());
+    // D7: Do not percent-decode here (RFC 5987 branch already decodes in header parser)
+    QString name = raw;
 
     // Normalize Windows backslashes to forward slashes
     name.replace(QLatin1Char('\\'), QLatin1Char('/'));

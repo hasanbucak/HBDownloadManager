@@ -108,7 +108,10 @@ bool RangePlanner::validateContentRangeHeader(const QString &contentRangeHeader,
     if (first != expectedStart) {
         return false;
     }
-    if (last > segEnd) {
+    if (segEnd >= 0 && last > segEnd) {
+        return false;
+    }
+    if (totalBytes > 0 && last >= totalBytes) {
         return false;
     }
     if (first > last) {

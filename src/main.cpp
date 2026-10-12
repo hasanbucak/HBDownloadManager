@@ -14,6 +14,16 @@
 #include <QLockFile>
 #include <QDir>
 #include <QStandardPaths>
+#include <QSocketNotifier>
+#include <csignal>
+#include <sys/socket.h>
+
+static int s_sigFd[2] = {-1, -1};
+static void onUnixSignal(int) {
+    const char c = 1;
+    ssize_t r = ::write(s_sigFd[0], &c, 1);
+    (void)r;
+}
 
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
@@ -24,6 +34,26 @@ int main(int argc, char *argv[]) {
     app.setOrganizationName("HasanBucak");
     app.setOrganizationDomain("hasanbucak.com");
     app.setWindowIcon(QIcon(":/icons/app_icon.png"));
+
+    // D6: Self-pipe pattern for clean termination on SIGTERM, SIGHUP, SIGINT
+    if (::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, s_sigFd) == 0) {
+        QSocketNotifier *sigNotifier = new QSocketNotifier(s_sigFd[1], QSocketNotifier::Read, &app);
+        QObject::connect(sigNotifier, &QSocketNotifier::activated, &app, [&app]() {
+            char c;
+            ssize_t r = ::read(s_sigFd[1], &c, 1);
+            (void)r;
+            app.quit();
+        });
+
+        struct sigaction sa;
+        ::memset(&sa, 0, sizeof(sa));
+        sa.sa_handler = onUnixSignal;
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = SA_RESTART;
+        ::sigaction(SIGTERM, &sa, NULL);
+        ::sigaction(SIGHUP, &sa, NULL);
+        ::sigaction(SIGINT, &sa, NULL);
+    }
 
     QString runtimeDir = qEnvironmentVariable("XDG_RUNTIME_DIR");
     if (runtimeDir.isEmpty() || !QDir(runtimeDir).exists()) {
@@ -73,6 +103,7 @@ int main(int argc, char *argv[]) {
 
     // Çekirdek indirme yöneticisi
     DownloadManager &dm = DownloadManager::instance();
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, &dm, &DownloadManager::shutdown);
 
     // 127.0.0.1:48213 yerel HTTP köprüsü (Chrome/Firefox eklentisi için)
     LocalServer server(dm.serverPort(), &app);

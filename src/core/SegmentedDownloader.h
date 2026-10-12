@@ -104,6 +104,8 @@ private:
     int m_singleRetries;
     int m_singleConnectFailures;
     int m_fullRestarts;
+    int m_probeRetries;
+    qint64 m_probeLaunchTime;
 
     int m_fileFd;
     bool m_stopped;

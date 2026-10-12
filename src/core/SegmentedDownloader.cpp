@@ -78,6 +78,8 @@ SegmentedDownloader::SegmentedDownloader(const DownloadItem &item, QObject *pare
       m_singleRetries(0),
       m_singleConnectFailures(0),
       m_fullRestarts(0),
+      m_probeRetries(0),
+      m_probeLaunchTime(0),
       m_fileFd(-1),
       m_stopped(false),
       m_finished(false),
@@ -196,12 +198,16 @@ QNetworkRequest SegmentedDownloader::createRequest(const QUrl &url, const QStrin
 
     if (!rangeHeader.isEmpty()) {
         req.setRawHeader("Range", rangeHeader.toUtf8());
+        if (!m_item.m_etag.isEmpty()) {
+            req.setRawHeader("If-Range", m_item.m_etag.toUtf8());
+        }
     }
 
     return req;
 }
 
 void SegmentedDownloader::probe() {
+    m_probeLaunchTime = m_elapsedTimer.elapsed();
     QNetworkRequest req = createRequest(m_item.m_url, "bytes=0-0");
     m_probeReply = m_nam->get(req);
     connect(m_probeReply, SIGNAL(metaDataChanged()), this, SLOT(onProbeMetaDataChanged()));
@@ -223,6 +229,26 @@ void SegmentedDownloader::onProbeMetaDataChanged() {
 
     if (reply->url().isValid() && reply->url() != m_item.m_url) {
         m_item.m_url = reply->url();
+    }
+
+    if (statusCode >= 500 && statusCode < 600) {
+        reply->abort();
+        reply->deleteLater();
+        if (m_probeRetries < 3) {
+            m_probeRetries++;
+            if (m_item.m_originalUrl.isValid() && m_item.m_url != m_item.m_originalUrl) {
+                m_item.m_url = m_item.m_originalUrl;
+            }
+            int delayMs = 1000 * m_probeRetries;
+            QTimer::singleShot(delayMs, this, [this]() {
+                if (!m_stopped && !m_finished) {
+                    probe();
+                }
+            });
+            return;
+        }
+        failDownload(tr("Sunucu hatası (HTTP %1)").arg(statusCode));
+        return;
     }
 
     if (statusCode == 401 || statusCode == 403) {
@@ -289,6 +315,22 @@ void SegmentedDownloader::onProbeFinished() {
             failDownload(tr("Dosya bulunamadı (HTTP %1)").arg(status));
             return;
         }
+
+        // Retry transient network errors or 5xx up to 3 times
+        if (m_probeRetries < 3) {
+            m_probeRetries++;
+            if (m_item.m_originalUrl.isValid() && m_item.m_url != m_item.m_originalUrl) {
+                m_item.m_url = m_item.m_originalUrl;
+            }
+            int delayMs = 1000 * m_probeRetries;
+            QTimer::singleShot(delayMs, this, [this]() {
+                if (!m_stopped && !m_finished) {
+                    probe();
+                }
+            });
+            return;
+        }
+
         failDownload(reply->errorString());
         return;
     }
@@ -302,6 +344,10 @@ void SegmentedDownloader::handleProbeReply(QNetworkReply *reply) {
     if (statusCode < 200 || statusCode >= 300) {
         failDownload(tr("Sunucu hatası (HTTP %1)").arg(statusCode));
         return;
+    }
+
+    if (reply->hasRawHeader("ETag")) {
+        m_item.m_etag = QString::fromUtf8(reply->rawHeader("ETag")).trimmed();
     }
 
     QVariant redirect = reply->attribute(QNetworkRequest::RedirectionTargetAttribute);
@@ -372,6 +418,7 @@ void SegmentedDownloader::handleProbeReply(QNetworkReply *reply) {
     targetSegments = qBound(1, targetSegments, 16);
 
     if (ranges && total > 0) {
+        m_item.m_receivedBytes = 0; // D4: reset before planning!
         m_item.m_segments = RangePlanner::planAdaptive(total, targetSegments, minSegmentSize, ranges);
 
         if (!openPartFile(true)) {
@@ -796,6 +843,13 @@ void SegmentedDownloader::onSingleFinished() {
                 return;
             }
         }
+        if (!m_item.m_supportsRanges) {
+            m_fullRestarts++;
+            if (m_fullRestarts > 3) {
+                failDownload(tr("Tek akış indirmesi baştan başlatma sınırı aşıldı (sınır 3)"));
+                return;
+            }
+        }
         m_singleRetries++;
         if (m_singleRetries <= s_maxRetries) {
             int delayMs = 1000 * m_singleRetries;
@@ -812,6 +866,13 @@ void SegmentedDownloader::onSingleFinished() {
     }
 
     if (m_item.m_totalBytes > 0 && m_item.m_receivedBytes < m_item.m_totalBytes) {
+        if (!m_item.m_supportsRanges) {
+            m_fullRestarts++;
+            if (m_fullRestarts > 3) {
+                failDownload(tr("Tek akış indirmesi baştan başlatma sınırı aşıldı (sınır 3)"));
+                return;
+            }
+        }
         m_singleRetries++;
         if (m_singleRetries <= s_maxRetries) {
             int delayMs = 1000 * m_singleRetries;
@@ -997,6 +1058,13 @@ void SegmentedDownloader::onSpeedTimerTimeout() {
                 qWarning() << "Single stream connect timed out for >60s, aborting";
                 m_singleReply->abort();
             }
+        }
+    }
+
+    if (m_probeReply != NULL) {
+        if (now - m_probeLaunchTime > 15000) {
+            qWarning() << "Probe reply stalled for >15s, aborting to trigger retry";
+            m_probeReply->abort();
         }
     }
 }

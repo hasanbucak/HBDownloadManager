@@ -62,6 +62,8 @@ public:
     QString m_finalPath;
     int m_requestedSegments;
     QString m_quality;
+    QUrl m_originalUrl;
+    QString m_etag;
 
     // Çalışma zamanı (non-persistent) alanlar
     double m_speed;

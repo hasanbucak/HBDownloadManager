@@ -22,6 +22,9 @@ private slots:
     void testSafeFileRemovalCompletedDeletesFinalPathOnlyIfRequested();
     void testCookieClearingOnCompletionAndFailure();
     void testShutdownLifecycle();
+    void testCancelCompletedItemLeavesItCompleted();
+    void testSafeFileRemovalPausedItemKeepsPart();
+    void testSafeFileRemovalCancelledItemDeletesPart();
 };
 
 void TestDownloadLifecycle::initTestCase() {
@@ -234,6 +237,91 @@ void TestDownloadLifecycle::testShutdownLifecycle() {
 
     // Clean up
     dm.removeDownload(queuedItem.m_id, false);
+}
+
+void TestDownloadLifecycle::testCancelCompletedItemLeavesItCompleted() {
+    DownloadManager &dm = DownloadManager::instance();
+
+    DownloadItem item;
+    item.m_id = "completed-cancel-test-id";
+    item.m_fileName = "completed.zip";
+    item.m_state = DownloadStateCompleted;
+    dm.addDownload(item, false);
+    dm.findItem(item.m_id)->m_state = DownloadStateCompleted;
+
+    DownloadItem *found = dm.findItem(item.m_id);
+    QVERIFY(found != NULL);
+    QCOMPARE(found->m_state, DownloadStateCompleted);
+
+    // D2: cancelDownload on a Completed item leaves it Completed
+    dm.cancelDownload(item.m_id);
+
+    found = dm.findItem(item.m_id);
+    QVERIFY(found != NULL);
+    QCOMPARE(found->m_state, DownloadStateCompleted);
+
+    // Clean up
+    dm.removeDownload(item.m_id, false);
+}
+
+void TestDownloadLifecycle::testSafeFileRemovalPausedItemKeepsPart() {
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    DownloadManager &dm = DownloadManager::instance();
+
+    DownloadItem item;
+    item.m_id = "paused-keep-part-id";
+    item.m_fileName = "paused.zip";
+    item.m_directory = tempDir.path();
+    item.m_state = DownloadStatePaused;
+
+    QString partPath = item.partFilePath();
+    {
+        QFile partFile(partPath);
+        QVERIFY(partFile.open(QIODevice::WriteOnly));
+        partFile.write("VALUABLE RESUMABLE DATA");
+        partFile.close();
+    }
+    QVERIFY(QFile::exists(partPath));
+
+    dm.addDownload(item, false);
+
+    // D1: removeDownload with deleteFile = false keeps .part for Paused item
+    dm.removeDownload(item.m_id, false);
+
+    QVERIFY(QFile::exists(partPath));
+
+    // Clean up part file
+    QFile::remove(partPath);
+}
+
+void TestDownloadLifecycle::testSafeFileRemovalCancelledItemDeletesPart() {
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    DownloadManager &dm = DownloadManager::instance();
+
+    DownloadItem item;
+    item.m_id = "cancelled-delete-part-id";
+    item.m_fileName = "cancelled.zip";
+    item.m_directory = tempDir.path();
+    item.m_state = DownloadStateCancelled;
+
+    QString partPath = item.partFilePath();
+    {
+        QFile partFile(partPath);
+        QVERIFY(partFile.open(QIODevice::WriteOnly));
+        partFile.write("CANCELLED DISCARDABLE DATA");
+        partFile.close();
+    }
+    QVERIFY(QFile::exists(partPath));
+
+    dm.addDownload(item, false);
+    dm.findItem(item.m_id)->m_state = DownloadStateCancelled;
+
+    // D1: removeDownload on a Cancelled item deletes .part without asking even if deleteFile = false
+    dm.removeDownload(item.m_id, false);
+
+    QVERIFY(!QFile::exists(partPath));
 }
 
 QTEST_MAIN(TestDownloadLifecycle)

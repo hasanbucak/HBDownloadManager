@@ -400,7 +400,7 @@ void LocalServer::handleRequest(QTcpSocket *socket, const HttpRequest &req) {
             item.m_headers["User-Agent"] = obj["userAgent"].toString();
         }
         if (obj.contains("segments")) {
-            item.m_requestedSegments = obj["segments"].toInt(8);
+            item.m_requestedSegments = qBound(1, obj["segments"].toInt(8), 16);
         }
         if (obj.contains("quality")) {
             item.m_quality = obj["quality"].toString();

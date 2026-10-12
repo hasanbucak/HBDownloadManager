@@ -37,9 +37,9 @@ void TestPathUtils::testSanitizeRelativeTraversal() {
 }
 
 void TestPathUtils::testSanitizePercentEncodedTraversal() {
-    QCOMPARE(PathUtils::sanitizeFileName(QStringLiteral("..%2F..%2Fx")), QStringLiteral("x"));
-    QCOMPARE(PathUtils::sanitizeFileName(QStringLiteral("..%2f..%2fescape.tar.gz")), QStringLiteral("escape.tar.gz"));
-    QCOMPARE(PathUtils::sanitizeFileName(QStringLiteral("%2e%2e%2f%2e%2e%2fmalicious.sh")), QStringLiteral("malicious.sh"));
+    // D7: sanitizeFileName does not decode percent-encoding, preventing double-decoding (e.g. a%2541.zip -> a%2541.zip)
+    QCOMPARE(PathUtils::sanitizeFileName(QStringLiteral("a%2541.zip")), QStringLiteral("a%2541.zip"));
+    QCOMPARE(PathUtils::sanitizeFileName(QStringLiteral("my%20file.pdf")), QStringLiteral("my%20file.pdf"));
 }
 
 void TestPathUtils::testSanitizeAbsolutePath() {
@@ -119,11 +119,10 @@ void TestPathUtils::testSafeJoinRejectsEscape() {
     QCOMPARE(QFileInfo(joinedRel).absolutePath(), canonicalBase);
     QCOMPARE(QFileInfo(joinedRel).fileName(), QStringLiteral("passwd"));
 
-    // Verify percent-encoded traversal does NOT escape directory
+    // Verify percent-encoded string stays strictly inside base directory and does not escape
     const QString joinedEnc = PathUtils::safeJoin(base, QStringLiteral("..%2F..%2F..%2Fetc%2Fshadow"));
     QVERIFY(!joinedEnc.isEmpty());
     QCOMPARE(QFileInfo(joinedEnc).absolutePath(), canonicalBase);
-    QCOMPARE(QFileInfo(joinedEnc).fileName(), QStringLiteral("shadow"));
 
     // Verify absolute path does NOT escape directory
     const QString joinedAbs = PathUtils::safeJoin(base, QStringLiteral("/usr/bin/bash"));

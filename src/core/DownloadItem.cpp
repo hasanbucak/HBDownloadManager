@@ -15,6 +15,8 @@ DownloadItem::DownloadItem()
       m_supportsRanges(false),
       m_createdAt(QDateTime::currentDateTime()),
       m_requestedSegments(8),
+      m_originalUrl(),
+      m_etag(),
       m_speed(0.0),
       m_videoPercent(0.0),
       m_lastReceived(0),
@@ -34,6 +36,8 @@ DownloadItem::DownloadItem(const QUrl &url, const QString &dir)
       m_supportsRanges(false),
       m_createdAt(QDateTime::currentDateTime()),
       m_requestedSegments(8),
+      m_originalUrl(url),
+      m_etag(),
       m_speed(0.0),
       m_videoPercent(0.0),
       m_lastReceived(0),
@@ -117,7 +121,10 @@ QString DownloadItem::formattedEta() const {
 }
 
 QString DownloadItem::partFilePath() const {
-    return QDir(m_directory).filePath(QString(".dm-%1.part").arg(m_id));
+    QString safeId = m_id;
+    safeId.remove(QRegularExpression("[^a-zA-Z0-9_-]"));
+    if (safeId.isEmpty()) safeId = "unknown";
+    return QDir(m_directory).filePath(QString(".dm-%1.part").arg(safeId));
 }
 
 QString DownloadItem::targetFilePath() const {
@@ -214,6 +221,8 @@ QJsonObject DownloadItem::toJson() const {
     obj["finalPath"] = m_finalPath;
     obj["requestedSegments"] = m_requestedSegments;
     obj["quality"] = m_quality;
+    obj["originalUrl"] = m_originalUrl.toString();
+    obj["etag"] = m_etag;
     obj["cookieHeader"] = m_cookieHeader;
     obj["cookies"] = m_cookies;
 
@@ -234,8 +243,21 @@ QJsonObject DownloadItem::toJson() const {
 
 DownloadItem DownloadItem::fromJson(const QJsonObject &obj) {
     DownloadItem item;
-    item.m_id = obj["id"].toString();
+    static const QRegularExpression idRegex("^[a-zA-Z0-9_-]+$");
+    QString rawId = obj["id"].toString();
+    if (rawId.isEmpty()) {
+        item.m_id.clear();
+    } else if (idRegex.match(rawId).hasMatch() && rawId.length() <= 64) {
+        item.m_id = rawId;
+    } else {
+        item.m_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    }
     item.m_url = QUrl(obj["url"].toString());
+    item.m_originalUrl = QUrl(obj["originalUrl"].toString());
+    if (!item.m_originalUrl.isValid() || item.m_originalUrl.isEmpty()) {
+        item.m_originalUrl = item.m_url;
+    }
+    item.m_etag = obj["etag"].toString();
     item.m_fileName = PathUtils::sanitizeFileName(obj["fileName"].toString());
     item.m_directory = obj["directory"].toString();
     QString kindStr = obj["kind"].toString();
@@ -265,13 +287,8 @@ DownloadItem DownloadItem::fromJson(const QJsonObject &obj) {
         item.m_completedAt = QDateTime::fromString(obj["completedAt"].toString(), Qt::ISODate);
     }
     item.m_finalPath = obj["finalPath"].toString();
-    if (!item.m_finalPath.isEmpty()) {
-        QString safe = PathUtils::safeJoin(item.m_directory, QFileInfo(item.m_finalPath).fileName());
-        if (safe.isEmpty() || item.m_finalPath != safe) {
-            item.m_finalPath.clear();
-        }
-    }
-    item.m_requestedSegments = obj["requestedSegments"].toInt(8);
+    // D7: Do not wipe m_finalPath if directory doesn't exist yet (e.g. unmounted USB)
+    item.m_requestedSegments = qBound(1, obj["requestedSegments"].toInt(8), 16);
     item.m_cookieHeader = obj["cookieHeader"].toString();
     item.m_cookies = obj["cookies"].toArray();
 

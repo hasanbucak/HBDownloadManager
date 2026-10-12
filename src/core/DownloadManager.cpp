@@ -11,6 +11,7 @@
 #include <QTimer>
 #include <QCoreApplication>
 #include <QDebug>
+#include <sys/stat.h>
 
 DownloadManager& DownloadManager::instance() {
     static DownloadManager s_instance;
@@ -116,6 +117,7 @@ void DownloadManager::stopDownloader(const QString &id, bool immediateDelete) {
     if (m_activeSegmented.contains(id)) {
         SegmentedDownloader *downloader = m_activeSegmented.take(id);
         downloader->disconnect(this);
+        downloader->syncToDisk();
         downloader->pause();
         if (immediateDelete) {
             delete downloader;
@@ -240,16 +242,19 @@ void DownloadManager::shutdown() {
 }
 
 void DownloadManager::cancelDownload(const QString &id) {
-    stopDownloader(id);
     DownloadItem *item = findItem(id);
-    if (item != NULL) {
-        item->m_state = DownloadStateCancelled;
-        item->m_speed = 0.0;
-        item->m_cookies = QJsonArray();
-        item->m_cookieHeader.clear();
-        emit atItemUpdated(*item);
-        saveState();
-    }
+    if (item == NULL) return;
+    if (item->m_state == DownloadStateCompleted) return;
+    if (item->m_state == DownloadStateCancelled) return;
+
+    stopDownloader(id);
+    item->m_state = DownloadStateCancelled;
+    item->m_speed = 0.0;
+    item->m_cookies = QJsonArray();
+    item->m_cookieHeader.clear();
+    emit atItemUpdated(*item);
+    saveState();
+
     if (activeCount() == 0 && m_saveTimer && m_saveTimer->isActive()) {
         m_saveTimer->stop();
     }
@@ -262,6 +267,7 @@ void DownloadManager::removeDownload(const QString &id, bool deleteFile) {
 
     // F7: Read item state BEFORE stopping downloader (do not turn Completed into Paused)
     const bool wasCompleted = (found->m_state == DownloadStateCompleted);
+    const bool wasCancelled = (found->m_state == DownloadStateCancelled);
     const QString finalPath = found->m_finalPath;
     const QString partPath = found->partFilePath();
 
@@ -274,9 +280,12 @@ void DownloadManager::removeDownload(const QString &id, bool deleteFile) {
         }
     }
 
-    // Always remove part file (the .part always belongs to us)
-    if (QFile::exists(partPath)) {
-        QFile::remove(partPath);
+    // D1: Delete the .part without asking only for Cancelled items, or if deleteFile is explicitly requested.
+    // Keep .part intact for Paused and Error items if deleteFile is false.
+    if (wasCancelled || deleteFile) {
+        if (QFile::exists(partPath)) {
+            QFile::remove(partPath);
+        }
     }
 
     // If deleteFile is true, ONLY remove finalPath if Completed and !finalPath.isEmpty()
@@ -520,6 +529,12 @@ void DownloadManager::onVideoFinished(bool success, const QString &finalPath, co
 
 void DownloadManager::onPeriodicSaveTimeout() {
     if (activeCount() > 0) {
+        // D5: Sync active segmented downloaders to disk (fdatasync) before taking snapshot
+        for (QMap<QString, SegmentedDownloader*>::iterator it = m_activeSegmented.begin(); it != m_activeSegmented.end(); ++it) {
+            if (it.value() != NULL) {
+                it.value()->syncToDisk();
+            }
+        }
         saveState();
     } else {
         if (m_saveTimer && m_saveTimer->isActive()) {
@@ -531,6 +546,7 @@ void DownloadManager::onPeriodicSaveTimeout() {
 QString DownloadManager::configFilePath() const {
     QString configDir = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation) + "/hb-download-manager";
     QDir().mkpath(configDir);
+    ::chmod(configDir.toLocal8Bit().constData(), 0700);
     return configDir + "/downloads.json";
 }
 
@@ -570,12 +586,25 @@ void DownloadManager::loadState() {
     QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
     if (parseError.error != QJsonParseError::NoError || !doc.isArray()) {
         qWarning() << "Failed to parse state file:" << parseError.errorString();
+
+        // D7: Clean up corrupt state files older than 7 days
+        QDir cfgDir(QFileInfo(path).absolutePath());
+        QStringList oldCorrupt = cfgDir.entryList(QStringList() << "downloads.json.corrupt-*", QDir::Files);
+        QDateTime now = QDateTime::currentDateTime();
+        for (int i = 0; i < oldCorrupt.size(); ++i) {
+            QFileInfo cInfo(cfgDir.filePath(oldCorrupt.at(i)));
+            if (cInfo.lastModified().daysTo(now) > 7) {
+                cfgDir.remove(oldCorrupt.at(i));
+            }
+        }
+
         QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd-hhmmss");
         QString corruptPath = QString("%1.corrupt-%2").arg(path, timestamp);
         if (QFile::exists(corruptPath)) {
             corruptPath = QString("%1.corrupt-%2").arg(path, QString::number(QDateTime::currentMSecsSinceEpoch()));
         }
         QFile::rename(path, corruptPath);
+        QFile::setPermissions(corruptPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
         return;
     }
 

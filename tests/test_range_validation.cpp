@@ -18,6 +18,7 @@ private slots:
     void testWildcardTotal();
     void testMalformedHeaders();
     void testWriteFully();
+    void testSingleStreamContentRangeValidation();
 };
 
 void TestRangeValidation::initTestCase() {
@@ -131,6 +132,34 @@ void TestRangeValidation::testWriteFully() {
     tmp.seek(0);
     QByteArray readBack = tmp.readAll();
     QVERIFY(readBack.startsWith("Hello Reliable"));
+}
+
+void TestRangeValidation::testSingleStreamContentRangeValidation() {
+    qint64 first = -1;
+    qint64 last = -1;
+    bool ok = SegmentedDownloader::validateContentRangeHeader(
+        QStringLiteral("bytes 100-1023/1024"),
+        100,  // expectedStart
+        -1,   // segEnd = -1 (single stream open end)
+        1024, // totalBytes
+        &first,
+        &last
+    );
+    QVERIFY(ok);
+    QCOMPARE(first, 100);
+    QCOMPARE(last, 1023);
+
+    // Mismatched expected start should fail
+    QVERIFY(!SegmentedDownloader::validateContentRangeHeader(
+        QStringLiteral("bytes 0-1023/1024"),
+        100, -1, 1024
+    ));
+
+    // Mismatched total size should fail
+    QVERIFY(!SegmentedDownloader::validateContentRangeHeader(
+        QStringLiteral("bytes 100-1023/2048"),
+        100, -1, 1024
+    ));
 }
 
 QTEST_MAIN(TestRangeValidation)

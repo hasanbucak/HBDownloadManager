@@ -290,24 +290,44 @@ void MainWindow::onRemoveClicked() {
     QString id = selectedDownloadId();
     if (id.isEmpty()) return;
 
-    QMessageBox msgBox(this);
-    msgBox.setWindowTitle(tr("İndirmeyi Kaldır"));
-    msgBox.setText(tr("Seçili indirme listeden kaldırılsın mı?"));
-    msgBox.setInformativeText(tr("Dosyayı sabit diskinizden de tamamen silmek istiyor musunuz?"));
-    msgBox.setIcon(QMessageBox::Question);
+    DownloadItem *item = DownloadManager::instance().findItem(id);
+    if (!item) return;
 
-    QPushButton *btnRemoveOnly = msgBox.addButton(tr("Listeden Kaldır"), QMessageBox::ActionRole);
-    QPushButton *btnDeleteFile = msgBox.addButton(tr("Dosyayı da Sil"), QMessageBox::DestructiveRole);
-    QPushButton *btnCancel = msgBox.addButton(tr("İptal"), QMessageBox::RejectRole);
-    Q_UNUSED(btnCancel);
+    if (item->m_state == DownloadStateCompleted) {
+        QMessageBox msgBox(this);
+        msgBox.setWindowTitle(tr("İndirmeyi Kaldır"));
+        msgBox.setText(tr("Seçili indirme listeden kaldırılsın mı?"));
+        msgBox.setInformativeText(tr("Dosyayı sabit diskinizden de tamamen silmek istiyor musunuz?"));
+        msgBox.setIcon(QMessageBox::Question);
 
-    msgBox.setDefaultButton(btnRemoveOnly);
-    msgBox.exec();
+        QPushButton *btnRemoveOnly = msgBox.addButton(tr("Listeden Kaldır"), QMessageBox::ActionRole);
+        QPushButton *btnDeleteFile = msgBox.addButton(tr("Dosyayı da Sil"), QMessageBox::DestructiveRole);
+        QPushButton *btnCancel = msgBox.addButton(tr("İptal"), QMessageBox::RejectRole);
+        Q_UNUSED(btnCancel);
 
-    if (msgBox.clickedButton() == btnDeleteFile) {
-        DownloadManager::instance().removeDownload(id, true);
-    } else if (msgBox.clickedButton() == btnRemoveOnly) {
+        msgBox.setDefaultButton(btnRemoveOnly);
+        msgBox.exec();
+
+        if (msgBox.clickedButton() == btnDeleteFile) {
+            DownloadManager::instance().removeDownload(id, true);
+        } else if (msgBox.clickedButton() == btnRemoveOnly) {
+            DownloadManager::instance().removeDownload(id, false);
+        }
+    } else if (item->m_state == DownloadStateCancelled) {
         DownloadManager::instance().removeDownload(id, false);
+    } else {
+        // D1: Explicit confirmation naming the lost partial data
+        double mb = item->m_receivedBytes / (1024.0 * 1024.0);
+        QString mbStr = QString::number(mb, 'f', 1);
+        QMessageBox::StandardButton reply = QMessageBox::warning(
+            this, tr("Listeden Kaldır"),
+            tr("Kısmen indirilen veri (%1 MB) silinecek. İndirmeyi listeden kaldırmak istediğinizden emin misiniz?").arg(mbStr),
+            QMessageBox::Yes | QMessageBox::Cancel,
+            QMessageBox::Cancel
+        );
+        if (reply == QMessageBox::Yes) {
+            DownloadManager::instance().removeDownload(id, true);
+        }
     }
 }
 
@@ -315,9 +335,7 @@ void MainWindow::onClearCompletedClicked() {
     const QList<DownloadItem> &list = DownloadManager::instance().items();
     QStringList toRemove;
     for (int i = 0; i < list.size(); ++i) {
-        if (list.at(i).m_state == DownloadStateCompleted ||
-            list.at(i).m_state == DownloadStateError ||
-            list.at(i).m_state == DownloadStateCancelled) {
+        if (list.at(i).m_state == DownloadStateCompleted) {
             toRemove.append(list.at(i).m_id);
         }
     }
@@ -434,7 +452,25 @@ void MainWindow::onTableContextMenu(const QPoint &pos) {
 
     menu.addSeparator();
     QAction *actRemove = menu.addAction(tr("Listeden Kaldır"));
-    connect(actRemove, &QAction::triggered, [id]() { DownloadManager::instance().removeDownload(id, false); });
+    connect(actRemove, &QAction::triggered, [this, id]() {
+        DownloadItem *item = DownloadManager::instance().findItem(id);
+        if (!item) return;
+        if (item->m_state != DownloadStateCompleted && item->m_state != DownloadStateCancelled) {
+            double mb = item->m_receivedBytes / (1024.0 * 1024.0);
+            QString mbStr = QString::number(mb, 'f', 1);
+            QMessageBox::StandardButton reply = QMessageBox::warning(
+                this, tr("Listeden Kaldır"),
+                tr("Kısmen indirilen veri (%1 MB) silinecek. İndirmeyi listeden kaldırmak istediğinizden emin misiniz?").arg(mbStr),
+                QMessageBox::Yes | QMessageBox::Cancel,
+                QMessageBox::Cancel
+            );
+            if (reply == QMessageBox::Yes) {
+                DownloadManager::instance().removeDownload(id, true);
+            }
+        } else {
+            DownloadManager::instance().removeDownload(id, false);
+        }
+    });
 
     QAction *actDelete = menu.addAction(tr("Dosyayı ve Listeden Sil"));
     connect(actDelete, &QAction::triggered, [this, id]() {
