@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=HB Download Manager
+Comment=Hızlı ve Çok Parçalı İndirme Yöneticisi (IDM Alternatifi)
+Exec=/home/hasanbucak/.gemini/antigravity/scratch/mc-download-manager-linux/hb-download-manager %U
+Icon=/home/hasanbucak/.gemini/antigravity/scratch/mc-download-manager-linux/resources/app_icon.png
+Terminal=false
+Type=Application
+Categories=Network;FileTransfer;
+MimeType=x-scheme-handler/http;x-scheme-handler/https;
+StartupNotify=true
