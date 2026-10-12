@@ -1,5 +1,6 @@
 #include "NewDownloadDialog.h"
 #include "PathUtils.h"
+#include "MediaHosts.h"
 #include "../core/DownloadManager.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -30,9 +31,7 @@ NewDownloadDialog::NewDownloadDialog(const QUrl &url, QWidget *parent)
         if (name.isEmpty()) name = "download";
         m_fileNameEdit->setText(name);
 
-        QString host = url.host().toLower();
-        if (host.contains("youtube.com") || host.contains("youtu.be") ||
-            host.contains("vimeo.com") || host.contains("tiktok.com")) {
+        if (MediaHosts::isStreamingSite(url.host())) {
             m_videoRadio->setChecked(true);
         } else {
             m_fileRadio->setChecked(true);

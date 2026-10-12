@@ -1,5 +1,6 @@
 #include "LocalServer.h"
 #include "PathUtils.h"
+#include "MediaHosts.h"
 #include "../core/DownloadManager.h"
 #include <QHostAddress>
 #include <QJsonDocument>
@@ -361,19 +362,15 @@ void LocalServer::handleRequest(QTcpSocket *socket, const HttpRequest &req) {
         }
         item.m_cookieHeader = obj["cookieHeader"].toString();
         item.m_cookies = obj["cookies"].toArray();
-        QString kindStr = obj["kind"].toString();
+        QString kindStr = obj["kind"].toString().trimmed().toLower();
         if (kindStr == "audio") {
             item.m_kind = DownloadKindAudio;
         } else if (kindStr == "video") {
             item.m_kind = DownloadKindVideo;
+        } else if (kindStr == "file") {
+            item.m_kind = DownloadKindFile;
         } else {
-            QString host = url.host().toLower();
-            if (host.contains("youtube.com") || host.contains("youtu.be") ||
-                host.contains("vimeo.com") || host.contains("dailymotion.com") ||
-                host.contains("tiktok.com") || host.contains("instagram.com") ||
-                host.contains("facebook.com") || host.contains("fb.watch") || host.contains("fb.com") ||
-                host.contains("twitch.tv") || host.contains("x.com") || host.contains("twitter.com") ||
-                obj.contains("quality")) {
+            if (MediaHosts::isStreamingSite(url.host())) {
                 item.m_kind = DownloadKindVideo;
             } else {
                 item.m_kind = DownloadKindFile;

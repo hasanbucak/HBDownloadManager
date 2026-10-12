@@ -18,16 +18,6 @@ const AUDIO_EXT = /\.(mp3|m4a|aac|ogg|opus|wav|flac)(\?|#|$)/i;
 const FRAGMENT = /\.(ts|m4s|m4f|cmfv|cmfa|fmp4|init)(\?|#|$)|[/_.-](seg|segment|chunk|frag|fragment)[-_]?\d+/i;
 const IGNORED_HOSTS = /(^|\.)googlevideo\.com$|(^|\.)fbcdn\.net$|(^|\.)twimg\.com$/i;
 
-function detectMediaKind(filename, url, mime) {
-  const m = (mime || '').toLowerCase();
-  if (m.startsWith('audio/')) return 'audio';
-  if (m.startsWith('video/')) return 'video';
-  const target = filename || url || '';
-  if (AUDIO_EXT.test(target)) return 'audio';
-  if (VIDEO_EXT.test(target)) return 'video';
-  return 'file';
-}
-
 // ---------- Settings ----------
 async function getSettings() {
   const s = await api.storage.local.get('settings');
@@ -42,13 +32,23 @@ const base = (s) => `http://127.0.0.1:${s.port}`;
 // ---------- Auth token (Native host handshake) ----------
 let cachedToken = null;
 
+if (api.storage?.session?.setAccessLevel) {
+  try {
+    api.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' }).catch(() => {});
+  } catch {}
+}
+
 async function requestTokenFromNativeHost() {
   if (!api.runtime.sendNativeMessage) return null;
   try {
     const r = await api.runtime.sendNativeMessage(IS_SAFARI ? 'application.id' : NATIVE_HOST, { action: 'getToken' });
     if (r && r.ok && r.token) {
       cachedToken = r.token;
-      await api.storage.local.set({ bridgeToken: r.token, token: r.token });
+      if (api.storage?.session) {
+        await api.storage.session.set({ token: r.token });
+      } else {
+        await api.storage.local.set({ token: r.token });
+      }
       return r.token;
     }
   } catch {}
@@ -58,10 +58,18 @@ async function requestTokenFromNativeHost() {
 async function getAuthToken() {
   if (cachedToken) return cachedToken;
   try {
-    const s = await api.storage.local.get(['bridgeToken', 'token']);
-    if (s?.bridgeToken || s?.token) {
-      cachedToken = s.bridgeToken || s.token;
-      return cachedToken;
+    if (api.storage?.session) {
+      const s = await api.storage.session.get('token');
+      if (s?.token) {
+        cachedToken = s.token;
+        return cachedToken;
+      }
+    } else {
+      const s = await api.storage.local.get('token');
+      if (s?.token) {
+        cachedToken = s.token;
+        return cachedToken;
+      }
     }
   } catch {}
   return await requestTokenFromNativeHost();
@@ -296,7 +304,7 @@ async function interceptDownload(item) {
   if (!matchesCaptureTypes(app, item.filename || '', url)) return false;
 
   const filename = item.filename ? item.filename.split(/[\\/]/).pop() : '';
-  const kind = detectMediaKind(filename, url, item.mime);
+  const kind = 'file';
   const res = await sendToApp({
     url,
     filename,
@@ -325,7 +333,9 @@ async function interceptDownload(item) {
 
 if (api.downloads?.onDeterminingFilename) {
   api.downloads.onDeterminingFilename.addListener((item, suggest) => {
-    interceptDownload(item).then((took) => { if (!took) { try { suggest(); } catch {} } });
+    interceptDownload(item)
+      .then((took) => { if (!took) { try { suggest(); } catch {} } })
+      .catch(() => { try { suggest(); } catch {} });
     return true;
   });
 } else if (api.downloads?.onCreated) {
@@ -470,9 +480,18 @@ function createMenus() {
     if (r && typeof r.then === 'function') r.then(create, create);
   } catch { create(); }
 }
-api.runtime.onInstalled.addListener(() => { createMenus(); requestTokenFromNativeHost().then(() => ping()); });
-api.runtime.onStartup?.addListener(() => { createMenus(); requestTokenFromNativeHost().then(() => ping()); });
-requestTokenFromNativeHost();
+async function initServiceWorker() {
+  createMenus();
+  const token = await getAuthToken();
+  if (!token) {
+    await requestTokenFromNativeHost();
+  }
+  await ping();
+}
+
+api.runtime.onInstalled.addListener(() => { initServiceWorker(); });
+api.runtime.onStartup?.addListener(() => { initServiceWorker(); });
+initServiceWorker();
 menus?.onClicked.addListener((info, tab) => {
   if (info.menuItemId === 'dm-link') {
     const url = info.linkUrl || info.srcUrl;

@@ -1,4 +1,5 @@
 #include "DownloadManager.h"
+#include "MediaHosts.h"
 #include <QDir>
 #include <QFile>
 #include <QSaveFile>
@@ -83,15 +84,11 @@ QString DownloadManager::addDownload(const DownloadItem &item, bool startImmedia
     if (copy.m_directory.isEmpty()) {
         copy.m_directory = m_defaultDir;
     }
-    if (copy.m_kind == DownloadKindFile) {
-        QString host = copy.m_url.host().toLower();
-        if (host.contains("youtube.com") || host.contains("youtu.be") ||
-            host.contains("vimeo.com") || host.contains("dailymotion.com") ||
-            host.contains("tiktok.com") || host.contains("instagram.com") ||
-            host.contains("facebook.com") || host.contains("fb.watch") || host.contains("fb.com") ||
-            host.contains("twitch.tv") || host.contains("x.com") || host.contains("twitter.com") ||
-            !copy.m_quality.isEmpty()) {
+    if (copy.m_kind == DownloadKindUnspecified) {
+        if (MediaHosts::isStreamingSite(copy.m_url.host())) {
             copy.m_kind = DownloadKindVideo;
+        } else {
+            copy.m_kind = DownloadKindFile;
         }
     }
     if (copy.m_requestedSegments <= 0) {

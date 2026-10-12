@@ -5,5 +5,5 @@ TEMPLATE = app
 TARGET = test_pathutils
 
 INCLUDEPATH += ../src ../src/utils
-SOURCES += test_pathutils.cpp ../src/utils/PathUtils.cpp
-HEADERS += ../src/utils/PathUtils.h
+SOURCES += test_pathutils.cpp ../src/utils/PathUtils.cpp ../src/utils/MediaHosts.cpp
+HEADERS += ../src/utils/PathUtils.h ../src/utils/MediaHosts.h

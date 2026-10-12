@@ -3,6 +3,7 @@
 #include <QFileInfo>
 #include <QDir>
 #include "PathUtils.h"
+#include "MediaHosts.h"
 
 #include <QStandardPaths>
 
@@ -22,6 +23,7 @@ private slots:
     void testSafeJoinRejectsEscape();
     void testSafeJoinInvalidDir();
     void testUniqueTargetPathLongFileName();
+    void testMediaHostsStreamingSite();
 };
 
 void TestPathUtils::initTestCase() {
@@ -168,6 +170,16 @@ void TestPathUtils::testUniqueTargetPathLongFileName() {
     QVERIFY(!QFile::exists(secondPath));
     QVERIFY(QFileInfo(secondPath).fileName().toUtf8().size() <= 240);
     QVERIFY(secondPath.contains(QStringLiteral(" (1).zip")));
+}
+
+void TestPathUtils::testMediaHostsStreamingSite() {
+    QCOMPARE(MediaHosts::isStreamingSite(QStringLiteral("www.dropbox.com")), false);
+    QCOMPARE(MediaHosts::isStreamingSite(QStringLiteral("m.youtube.com")), true);
+    QCOMPARE(MediaHosts::isStreamingSite(QStringLiteral("x.com")), true);
+    QCOMPARE(MediaHosts::isStreamingSite(QStringLiteral("linux.com")), false);
+    QCOMPARE(MediaHosts::isStreamingSite(QStringLiteral("xbox.com")), false);
+    QCOMPARE(MediaHosts::isStreamingSite(QStringLiteral("youtu.be")), true);
+    QCOMPARE(MediaHosts::isStreamingSite(QStringLiteral("vimeo.com")), true);
 }
 
 QTEST_MAIN(TestPathUtils)

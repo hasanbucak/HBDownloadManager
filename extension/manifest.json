@@ -3,6 +3,7 @@
   "name": "__MSG_extName__",
   "description": "__MSG_extDesc__",
   "version": "1.3.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwjr3Q990oxuSZlZENj4pmpSX6gIcz7+2u2ufMkx6MtSAePxYj+PNIE2oHNGLCWUQfy4Ly3nCDxQHL7E1VvUYso1PSuJlYatFHvzoj84d0o0MfMTlpNBShgWQkQym8PSL5ioVU7zmIGw93m9EnvCZ4lTTbvaMmgaSHBn+Hk8u1aeGhhnV8oPP8CToSJgvL1KdSp3elIhGCIxAs0ZFvHPmxzI2mqbl4zW8+t/dE3pKgctKQZvfKeBeXDbhJdEoc/re2OgakrMQJ3UFkfydBiWy47VAYHmKN8R3KGq+B0kDDJdrWAihBIEYJ08ZihnLwW9gDXq0fwNDDgfq04qUmPg3KwIDAQAB",
   "browser_specific_settings": {
     "gecko": {
       "id": "hbdm@hasanbucak.com",

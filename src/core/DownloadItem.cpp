@@ -8,7 +8,7 @@
 
 DownloadItem::DownloadItem()
     : m_id(QUuid::createUuid().toString(QUuid::WithoutBraces)),
-      m_kind(DownloadKindFile),
+      m_kind(DownloadKindUnspecified),
       m_state(DownloadStateQueued),
       m_totalBytes(-1),
       m_receivedBytes(0),
@@ -27,7 +27,7 @@ DownloadItem::DownloadItem()
 DownloadItem::DownloadItem(const QUrl &url, const QString &dir)
     : m_id(QUuid::createUuid().toString(QUuid::WithoutBraces)),
       m_url(url),
-      m_kind(DownloadKindFile),
+      m_kind(DownloadKindUnspecified),
       m_state(DownloadStateQueued),
       m_totalBytes(-1),
       m_receivedBytes(0),

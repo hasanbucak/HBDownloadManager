@@ -36,16 +36,19 @@
   // ---------- 1. Click Interception ----------
   let passThrough = null;
   document.addEventListener('click', (e) => {
+    const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    if (a && a === passThrough) {
+      passThrough = null;
+      return;
+    }
     if (!e.isTrusted) return;
+    if (!a) return;
     // YouTube ve video akış sayfalarında link tıklamalarını kesinlikle engelleme
     if (/youtube\.com|youtu\.be/i.test(location.hostname)) return;
 
     if (!state.clickIntercept || !state.settings?.intercept) return;
     if (!state.online && !(state.canLaunch && state.settings?.autoLaunch)) return;
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
-    const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
-    if (!a) return;
-    if (a === passThrough) { passThrough = null; return; }
     const href = a.href;
     if (!/^https?:/i.test(href)) return;
     const list = state.captureExtensions || [];
@@ -55,7 +58,7 @@
     e.preventDefault();
     e.stopPropagation();
     const downloadAttr = a.getAttribute('download');
-    const filename = downloadAttr || (a.textContent ? a.textContent.trim().slice(0, 100) : '');
+    const filename = (downloadAttr && downloadAttr.trim()) ? downloadAttr.trim() : '';
     send({ type: 'download', url: href, filename, referer: location.href, kind: 'file' }).then((r) => {
       if (r && r.ok) { if (!state.online) refresh(); return; }
       passThrough = a;

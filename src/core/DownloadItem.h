@@ -11,6 +11,7 @@
 #include <QUuid>
 
 enum DownloadKind {
+    DownloadKindUnspecified = -1,
     DownloadKindFile = 0,
     DownloadKindVideo,
     DownloadKindAudio

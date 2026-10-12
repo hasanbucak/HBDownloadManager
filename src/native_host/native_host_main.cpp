@@ -21,38 +21,49 @@ static bool installNativeHostManifests(const QString &hostBinaryPath) {
     chromeManifest["type"] = "stdio";
 
     QJsonArray origins;
-    origins.append("chrome-extension://afdfemednfkkmmbpliapapodafgbbeme/");
-    origins.append("chrome-extension://*/");
+    origins.append("chrome-extension://fmlcahmlpfmfnnemigpbbbnmkikepjko/");
     chromeManifest["allowed_origins"] = origins;
 
     QByteArray chromeJson = QJsonDocument(chromeManifest).toJson(QJsonDocument::Indented);
 
     QString home = QDir::homePath();
     QStringList chromeDirs;
-    // Linux Chromium tabanlı tarayıcılar (Chrome, Chromium, Brave, Edge, Opera, Vivaldi)
-    chromeDirs << home + "/.config/google-chrome/NativeMessagingHosts"
-               << home + "/.config/google-chrome-beta/NativeMessagingHosts"
-               << home + "/.config/google-chrome-unstable/NativeMessagingHosts"
-               << home + "/.config/chromium/NativeMessagingHosts"
-               << home + "/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts"
-               << home + "/.config/microsoft-edge/NativeMessagingHosts"
-               << home + "/.config/microsoft-edge-beta/NativeMessagingHosts"
-               << home + "/.config/microsoft-edge-dev/NativeMessagingHosts"
-               << home + "/.config/opera/NativeMessagingHosts"
-               << home + "/.config/opera-beta/NativeMessagingHosts"
-               << home + "/.config/opera-developer/NativeMessagingHosts"
-               << home + "/.config/opera-gx/NativeMessagingHosts"
-               << home + "/.config/vivaldi/NativeMessagingHosts"
-               << home + "/.config/yandex-browser/NativeMessagingHosts";
-
-    // macOS Chromium tabanlı tarayıcılar (MacBook desteği)
-    chromeDirs << home + "/Library/Application Support/Google/Chrome/NativeMessagingHosts"
-               << home + "/Library/Application Support/Chromium/NativeMessagingHosts"
-               << home + "/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts"
-               << home + "/Library/Application Support/Microsoft Edge/NativeMessagingHosts"
-               << home + "/Library/Application Support/com.operasoftware.Opera/NativeMessagingHosts"
-               << home + "/Library/Application Support/com.operasoftware.OperaGX/NativeMessagingHosts"
-               << home + "/Library/Application Support/Vivaldi/NativeMessagingHosts";
+#ifdef Q_OS_MACOS
+    QStringList candidateChrome;
+    candidateChrome << home + "/Library/Application Support/Google/Chrome"
+                    << home + "/Library/Application Support/Chromium"
+                    << home + "/Library/Application Support/BraveSoftware/Brave-Browser"
+                    << home + "/Library/Application Support/Microsoft Edge"
+                    << home + "/Library/Application Support/com.operasoftware.Opera"
+                    << home + "/Library/Application Support/com.operasoftware.OperaGX"
+                    << home + "/Library/Application Support/Vivaldi";
+    for (const QString &cDir : candidateChrome) {
+        if (QDir(cDir).exists()) {
+            chromeDirs << cDir + "/NativeMessagingHosts";
+        }
+    }
+#else
+    QStringList candidateChrome;
+    candidateChrome << home + "/.config/google-chrome"
+                    << home + "/.config/google-chrome-beta"
+                    << home + "/.config/google-chrome-unstable"
+                    << home + "/.config/chromium"
+                    << home + "/.config/BraveSoftware/Brave-Browser"
+                    << home + "/.config/microsoft-edge"
+                    << home + "/.config/microsoft-edge-beta"
+                    << home + "/.config/microsoft-edge-dev"
+                    << home + "/.config/opera"
+                    << home + "/.config/opera-beta"
+                    << home + "/.config/opera-developer"
+                    << home + "/.config/opera-gx"
+                    << home + "/.config/vivaldi"
+                    << home + "/.config/yandex-browser";
+    for (const QString &cDir : candidateChrome) {
+        if (QDir(cDir).exists()) {
+            chromeDirs << cDir + "/NativeMessagingHosts";
+        }
+    }
+#endif
 
     for (int i = 0; i < chromeDirs.size(); ++i) {
         QDir().mkpath(chromeDirs.at(i));
@@ -76,8 +87,15 @@ static bool installNativeHostManifests(const QString &hostBinaryPath) {
 
     QByteArray mozJson = QJsonDocument(mozManifest).toJson(QJsonDocument::Indented);
     QStringList mozDirs;
-    mozDirs << home + "/.mozilla/native-messaging-hosts"
-            << home + "/Library/Application Support/Mozilla/NativeMessagingHosts";
+#ifdef Q_OS_MACOS
+    if (QDir(home + "/Library/Application Support/Mozilla").exists()) {
+        mozDirs << home + "/Library/Application Support/Mozilla/NativeMessagingHosts";
+    }
+#else
+    if (QDir(home + "/.mozilla").exists()) {
+        mozDirs << home + "/.mozilla/native-messaging-hosts";
+    }
+#endif
 
     for (int i = 0; i < mozDirs.size(); ++i) {
         QDir().mkpath(mozDirs.at(i));
