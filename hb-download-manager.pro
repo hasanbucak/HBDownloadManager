@@ -4,6 +4,7 @@ TEMPLATE = app
 TARGET = hb-download-manager
 
 INCLUDEPATH += src src/core src/server src/ui src/utils
+QMAKE_LIBDIR += $$[QT_INSTALL_LIBS]
 
 HEADERS += src/core/SegmentInfo.h \
            src/core/DownloadItem.h \

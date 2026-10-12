@@ -17,6 +17,9 @@ public:
 
     void setServerStatus(bool listening, quint16 port, const QString &errorMsg = QString());
 
+public slots:
+    void onUrlDetected(const QUrl &url);
+
 private slots:
     void onNewDownloadClicked();
     void onPauseClicked();
@@ -33,7 +36,6 @@ private slots:
     void onItemAdded(const DownloadItem &item);
     void onItemUpdated(const DownloadItem &item);
     void onItemRemoved(const QString &id);
-    void onUrlDetected(const QUrl &url);
 
 protected:
     void closeEvent(QCloseEvent *event) override;

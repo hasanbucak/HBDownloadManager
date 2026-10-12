@@ -1,6 +1,8 @@
 #include "SegmentedDownloader.h"
 #include "PathUtils.h"
 #include "RangePlanner.h"
+#include <QNetworkCookieJar>
+#include <QNetworkCookie>
 #include <QDebug>
 #include <QDir>
 #include <QFileInfo>
@@ -53,6 +55,16 @@ void SegmentedDownloader::syncToDisk() {
     }
 }
 
+namespace {
+class BridgeCookieJar : public QNetworkCookieJar {
+public:
+    explicit BridgeCookieJar(QObject *parent = nullptr) : QNetworkCookieJar(parent) {}
+    void populate(const QList<QNetworkCookie> &cookies) {
+        setAllCookies(cookies);
+    }
+};
+}
+
 SegmentedDownloader::SegmentedDownloader(const DownloadItem &item, QObject *parent)
     : QObject(parent),
       m_item(item),
@@ -74,6 +86,22 @@ SegmentedDownloader::SegmentedDownloader(const DownloadItem &item, QObject *pare
       m_lastReportTime(0) {
     m_elapsedTimer.start();
     connect(m_speedTimer, SIGNAL(timeout()), this, SLOT(onSpeedTimerTimeout()));
+
+    if (!m_item.m_cookies.isEmpty()) {
+        BridgeCookieJar *jar = new BridgeCookieJar(m_nam);
+        QList<QNetworkCookie> cookieList;
+        for (int i = 0; i < m_item.m_cookies.size(); ++i) {
+            QJsonObject cObj = m_item.m_cookies.at(i).toObject();
+            QNetworkCookie cookie(cObj["name"].toString().toUtf8(), cObj["value"].toString().toUtf8());
+            if (cObj.contains("domain")) cookie.setDomain(cObj["domain"].toString());
+            if (cObj.contains("path")) cookie.setPath(cObj["path"].toString());
+            if (cObj.contains("secure")) cookie.setSecure(cObj["secure"].toBool());
+            if (cObj.contains("httpOnly")) cookie.setHttpOnly(cObj["httpOnly"].toBool());
+            cookieList.append(cookie);
+        }
+        jar->populate(cookieList);
+        m_nam->setCookieJar(jar);
+    }
 }
 
 SegmentedDownloader::~SegmentedDownloader() {
@@ -154,10 +182,11 @@ void SegmentedDownloader::cancel() {
 QNetworkRequest SegmentedDownloader::createRequest(const QUrl &url, const QString &rangeHeader) const {
     QNetworkRequest req(url);
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    req.setMaximumRedirectsAllowed(10);
     req.setRawHeader("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 HBDownloadManager/1.3");
     req.setRawHeader("Accept-Encoding", "identity");
 
-    if (!m_item.m_cookieHeader.isEmpty()) {
+    if (m_item.m_cookies.isEmpty() && !m_item.m_cookieHeader.isEmpty()) {
         req.setRawHeader("Cookie", m_item.m_cookieHeader.toUtf8());
     }
 
@@ -186,20 +215,14 @@ void SegmentedDownloader::onProbeMetaDataChanged() {
     if (m_stopped || m_finished) return;
 
     int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-    if (statusCode == 0) return;
+    if (statusCode == 0 || (statusCode >= 300 && statusCode < 400)) return;
 
     // Disconnect so finished() doesn't fire when we abort()
     reply->disconnect(this);
     m_probeReply = NULL;
 
-    QVariant redirect = reply->attribute(QNetworkRequest::RedirectionTargetAttribute);
-    if (redirect.isValid()) {
-        QUrl nextUrl = m_item.m_url.resolved(redirect.toUrl());
-        m_item.m_url = nextUrl;
-        reply->abort();
-        reply->deleteLater();
-        probe();
-        return;
+    if (reply->url().isValid() && reply->url() != m_item.m_url) {
+        m_item.m_url = reply->url();
     }
 
     if (statusCode == 401 || statusCode == 403) {

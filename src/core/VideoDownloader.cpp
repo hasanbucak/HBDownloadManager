@@ -1,4 +1,5 @@
 #include "VideoDownloader.h"
+#include "PathUtils.h"
 #include <QDebug>
 #include <QDir>
 #include <QFileInfo>
@@ -144,7 +145,7 @@ void VideoDownloader::start() {
          << "--windows-filenames"
          << "--no-mtime"
          << "--print" << "TITLE:%(title)s"
-         << "--print" << "after_move:filepath"
+         << "--print" << "after_move:HBDM_FILE:%(filepath)s"
          << "--progress-template"
          << "download:HBDM_PROG:%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress._speed_str)s|%(progress._eta_str)s|%(progress._percent_str)s|%(progress.filename)s"
          << "--no-simulate";
@@ -255,6 +256,7 @@ void VideoDownloader::parseOutputLine(const QString &line) {
     if (line.startsWith("TITLE:")) {
         QString rawTitle = line.mid(6).trimmed();
         if (!rawTitle.isEmpty()) {
+            QString safeTitle = PathUtils::sanitizeFileName(rawTitle);
             QString qualTag;
             QString qual = m_item.m_quality.trimmed().toLower();
             int heightNum = 0;
@@ -272,7 +274,23 @@ void VideoDownloader::parseOutputLine(const QString &line) {
                 qualTag = " [En Yüksek]";
             }
             QString ext = (m_item.m_kind == DownloadKindAudio ? ".mp3" : ".mp4");
-            m_item.m_fileName = rawTitle + qualTag + ext;
+            m_item.m_fileName = safeTitle + qualTag + ext;
+            emit atTitleDetected(m_item.m_fileName);
+        }
+        return;
+    }
+
+    if (line.startsWith("HBDM_FILE:")) {
+        QString candidate = line.mid(10).trimmed();
+        QFileInfo fi(candidate);
+        QString canonicalDir = QFileInfo(m_item.m_directory).canonicalFilePath();
+        QString canonicalFile = fi.canonicalFilePath();
+        if (canonicalFile.isEmpty()) {
+            canonicalFile = fi.absoluteFilePath();
+        }
+        if (!canonicalDir.isEmpty() && canonicalFile.startsWith(canonicalDir + '/')) {
+            m_finalPath = canonicalFile;
+            m_item.m_fileName = fi.fileName();
             emit atTitleDetected(m_item.m_fileName);
         }
         return;
@@ -417,17 +435,6 @@ void VideoDownloader::parseOutputLine(const QString &line) {
         m_item.m_stage = tr("Ses ve görüntü birleştiriliyor...");
         emit atProgressUpdated(99.0, m_item.m_totalBytes, m_item.m_totalBytes, "", "", m_item.m_stage);
         return;
-    }
-
-    // Capture exact final output file path from yt-dlp --print "after_move:filepath"
-    if (!line.startsWith('[') && !line.startsWith("HBDM_") && !line.startsWith("TITLE:") &&
-        !line.startsWith("ERROR") && !line.startsWith("WARNING") && !line.startsWith("Deleting original")) {
-        if (QFileInfo(line).isAbsolute() && (QFile::exists(line) || (!m_item.m_directory.isEmpty() && line.startsWith(m_item.m_directory)))) {
-            m_finalPath = line;
-            m_item.m_fileName = QFileInfo(m_finalPath).fileName();
-            emit atTitleDetected(m_item.m_fileName);
-            return;
-        }
     }
 
     if (line.contains("[download] 100%")) {

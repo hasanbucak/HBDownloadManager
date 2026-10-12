@@ -11,6 +11,10 @@
 #include "ui/TrayManager.h"
 #include "ui/NewDownloadDialog.h"
 
+#include <QLockFile>
+#include <QDir>
+#include <QStandardPaths>
+
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
     app.setQuitOnLastWindowClosed(false);
@@ -21,38 +25,50 @@ int main(int argc, char *argv[]) {
     app.setOrganizationDomain("hasanbucak.com");
     app.setWindowIcon(QIcon(":/icons/app_icon.png"));
 
-    const QString serverName = "hbdm-" + QString::number(getuid());
+    QString runtimeDir = qEnvironmentVariable("XDG_RUNTIME_DIR");
+    if (runtimeDir.isEmpty() || !QDir(runtimeDir).exists()) {
+        runtimeDir = QDir::tempPath();
+    }
+    const QString lockPath = runtimeDir + "/hb-download-manager.lock";
+    const QString sockPath = runtimeDir + "/hb-download-manager.sock";
 
-    // Tekil oturum kontrolü (Single-Instance Guard via QLocalServer)
-    QLocalSocket socket;
-    socket.connectToServer(serverName);
-    if (socket.waitForConnected(500)) {
+    QLockFile lockFile(lockPath);
+    lockFile.setStaleLockTime(10000);
+    bool isFirstInstance = lockFile.tryLock(500);
+
+    if (!isFirstInstance) {
         // Zaten çalışan bir kopya var! Komut satırı argümanlarını mevcut örneğe ilet
-        QStringList args = app.arguments();
-        QByteArray payload;
-        for (int i = 1; i < args.size(); ++i) {
-            QString arg = args.at(i);
-            if (arg == "--url" && i + 1 < args.size()) {
-                payload.append(args.at(++i).toUtf8()).append('\n');
-            } else if (arg.startsWith("http://") || arg.startsWith("https://")) {
-                payload.append(arg.toUtf8()).append('\n');
+        QLocalSocket socket;
+        socket.connectToServer(sockPath);
+        if (socket.waitForConnected(1000)) {
+            QStringList args = app.arguments();
+            QByteArray payload;
+            for (int i = 1; i < args.size(); ++i) {
+                QString arg = args.at(i);
+                if (arg == "--url" && i + 1 < args.size()) {
+                    payload.append(args.at(++i).toUtf8()).append('\n');
+                } else if (arg.startsWith("http://") || arg.startsWith("https://")) {
+                    payload.append(arg.toUtf8()).append('\n');
+                }
             }
+            if (payload.isEmpty()) {
+                payload.append('\n');
+            }
+            socket.write(payload);
+            socket.flush();
+            socket.waitForBytesWritten(1000);
+            socket.disconnectFromServer();
         }
-        if (payload.isEmpty()) {
-            payload.append('\n');
-        }
-        socket.write(payload);
-        socket.flush();
-        socket.waitForBytesWritten(1000);
         return 0;
     }
 
     // İlk çalışan kopya: bayat soketi temizle ve dinlemeye başla
-    QLocalServer::removeServer(serverName);
+    QLocalServer::removeServer(sockPath);
     QLocalServer localServer(&app);
-    if (!localServer.listen(serverName)) {
+    localServer.setSocketOptions(QLocalServer::UserAccessOption);
+    if (!localServer.listen(sockPath)) {
         qWarning("Yerel tekil soket sunucusu başlatılamadı '%s': %s",
-                 qPrintable(serverName), qPrintable(localServer.errorString()));
+                 qPrintable(sockPath), qPrintable(localServer.errorString()));
     }
 
     // Çekirdek indirme yöneticisi
@@ -83,19 +99,23 @@ int main(int argc, char *argv[]) {
             QLocalSocket *clientSocket = localServer.nextPendingConnection();
             if (!clientSocket) continue;
 
-            auto handleData = [&mainWindow, clientSocket]() {
-                QByteArray data = clientSocket->readAll();
-                if (!data.isEmpty()) {
-                    QString content = QString::fromUtf8(data);
-                    QStringList lines = content.split('\n', Qt::SkipEmptyParts);
-                    for (int i = 0; i < lines.size(); ++i) {
-                        QString trimmed = lines.at(i).trimmed();
-                        if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-                            QUrl url(trimmed);
-                            if (url.isValid()) {
-                                DownloadItem item(url);
-                                DownloadManager::instance().addDownload(item, true);
-                            }
+            QByteArray *buffer = new QByteArray();
+            QObject::connect(clientSocket, &QLocalSocket::readyRead, [clientSocket, buffer]() {
+                buffer->append(clientSocket->readAll());
+            });
+            QObject::connect(clientSocket, &QLocalSocket::disconnected, [&mainWindow, clientSocket, buffer]() {
+                buffer->append(clientSocket->readAll());
+                QString content = QString::fromUtf8(*buffer);
+                delete buffer;
+                clientSocket->deleteLater();
+
+                QStringList lines = content.split('\n', Qt::SkipEmptyParts);
+                for (int i = 0; i < lines.size(); ++i) {
+                    QString trimmed = lines.at(i).trimmed();
+                    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+                        QUrl url(trimmed);
+                        if (url.isValid()) {
+                            mainWindow.onUrlDetected(url);
                         }
                     }
                 }
@@ -103,13 +123,7 @@ int main(int argc, char *argv[]) {
                 mainWindow.showNormal();
                 mainWindow.activateWindow();
                 mainWindow.raise();
-            };
-
-            if (clientSocket->bytesAvailable() > 0) {
-                handleData();
-            }
-            QObject::connect(clientSocket, &QLocalSocket::readyRead, handleData);
-            QObject::connect(clientSocket, &QLocalSocket::disconnected, clientSocket, &QLocalSocket::deleteLater);
+            });
 
             mainWindow.show();
             mainWindow.showNormal();

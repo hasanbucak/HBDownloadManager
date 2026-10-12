@@ -75,6 +75,13 @@ async function getAuthToken() {
   return await requestTokenFromNativeHost();
 }
 
+async function hmacHex(keyStr, msg) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', enc.encode(keyStr), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(msg));
+  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 // Custom headers: Extension proof + secret token
 async function getBridgeHeaders(extraHeaders = {}) {
   const token = await getAuthToken();
@@ -95,11 +102,32 @@ async function ping(settings) {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 1200);
-    const headers = await getBridgeHeaders();
-    const r = await fetch(base(settings) + '/ping?browser=' + BROWSER, { signal: ctrl.signal, cache: 'no-store', headers });
+
+    // S7: Nonce challenge-response; token NEVER travels on /ping
+    const nonceBytes = new Uint8Array(16);
+    crypto.getRandomValues(nonceBytes);
+    const nonce = [...nonceBytes].map((b) => b.toString(16).padStart(2, '0')).join('');
+
+    const headers = {
+      'X-HBDM-Extension': BROWSER,
+      'X-HBDM-Extension-Id': api.runtime.id,
+    };
+    const r = await fetch(base(settings) + '/ping?nonce=' + nonce + '&browser=' + BROWSER, { signal: ctrl.signal, cache: 'no-store', headers });
     clearTimeout(t);
     if (!r.ok) return null;
     const app = await r.json();
+    if (!app || !app.ok) return null;
+
+    const token = await getAuthToken();
+    if (token) {
+      const expected = await hmacHex(token, 'hbdm-ping:' + nonce);
+      if (app.proof !== expected) {
+        // Fake or rogue process listening on port!
+        return null;
+      }
+      app.genuine = true;
+    }
+
     if (app && app.active > 0) startProgress();
     if (app && Array.isArray(app.captureExtensions)) api.storage.local.set({ captureExtensions: app.captureExtensions });
     return app;
@@ -198,6 +226,14 @@ function notify(title, message) {
 
 async function sendToApp({ url, filename, referer, kind, quality, estimatedBytes }) {
   const settings = await getSettings();
+  let app = await ping(settings);
+  if (!app && settings.autoLaunch) {
+    app = await ensureApp(settings);
+  }
+  if (!app) {
+    return { ok: false, error: 'app offline or unverified' };
+  }
+
   const ck = await cookiesFor(url);
   const payload = {
     url, filename: filename || '', referer: referer || '', kind: kind || 'file',

@@ -27,8 +27,11 @@ inline QString tokenFilePath() {
     return configDir() + "/bridge-token";
 }
 
-inline QString getOrCreateToken() {
-    QString finalPath = tokenFilePath();
+inline QString getOrCreateToken(const QString &overrideDir = QString()) {
+    QString dir = overrideDir.isEmpty() ? configDir() : overrideDir;
+    QDir().mkpath(dir);
+    ::chmod(dir.toLocal8Bit().constData(), 0700);
+    QString finalPath = dir + "/bridge-token";
 
     // Try reading existing token first
     {
@@ -60,8 +63,7 @@ inline QString getOrCreateToken() {
     QString newToken = QString::fromLatin1(bytes.toHex());
 
     // S9: atomic creation with O_EXCL temp file and hard link
-    QString dir = configDir();
-    QString tmp = dir + "/.bridge-token." + QString::number(::getpid());
+    QString tmp = dir + "/.bridge-token." + QString::number(::getpid()) + "." + QString::number(QRandomGenerator::system()->generate());
     int fd = ::open(tmp.toLocal8Bit().constData(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
     if (fd >= 0) {
         QByteArray tokenUtf8 = newToken.toUtf8();

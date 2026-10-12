@@ -4,6 +4,7 @@ TEMPLATE = app
 TARGET = test_download_lifecycle
 
 INCLUDEPATH += ../src ../src/core ../src/server ../src/ui ../src/utils
+QMAKE_LIBDIR += $$[QT_INSTALL_LIBS]
 SOURCES += test_download_lifecycle.cpp \
            mock_downloaders.cpp \
            ../src/utils/PathUtils.cpp \

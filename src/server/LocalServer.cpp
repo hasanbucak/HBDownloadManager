@@ -8,8 +8,9 @@
 #include <QDebug>
 #include <QDir>
 #include <QFile>
-#include <QFileInfo>
 #include <QRandomGenerator>
+#include <QMessageAuthenticationCode>
+#include <QUrlQuery>
 #include <sys/stat.h>
 #include "BridgeToken.h"
 
@@ -106,6 +107,12 @@ void LocalServer::onNewConnection() {
     while (m_server->hasPendingConnections()) {
         QTcpSocket *socket = m_server->nextPendingConnection();
         if (socket != NULL) {
+            if (m_clientBuffers.size() >= 16) {
+                socket->disconnectFromHost();
+                socket->deleteLater();
+                continue;
+            }
+
             m_clientBuffers[socket] = QByteArray();
 
             QTimer *timer = new QTimer(this);
@@ -151,10 +158,6 @@ void LocalServer::onClientReadyRead() {
     QTcpSocket *socket = qobject_cast<QTcpSocket*>(sender());
     if (socket == NULL) return;
 
-    if (m_clientTimers.contains(socket)) {
-        m_clientTimers[socket]->start(10000);
-    }
-
     m_clientBuffers[socket].append(socket->readAll());
     const QByteArray &buf = m_clientBuffers[socket];
 
@@ -178,17 +181,18 @@ void LocalServer::onClientReadyRead() {
     }
 }
 
-bool LocalServer::isOriginAllowed(const QString &origin, const QMap<QString, QString> &headers) {
-    if (origin.isEmpty()) {
+bool LocalServer::isOriginAllowed(const QString &rawOrigin, const QMap<QString, QString> &headers) {
+    Q_UNUSED(headers);
+    if (rawOrigin.isEmpty()) {
         return true;
     }
-    if (origin.startsWith("chrome-extension://") ||
+    QString origin = rawOrigin.trimmed();
+    if (origin.endsWith('/')) origin.chop(1);
+
+    static const QString s_chromeOrigin = QStringLiteral("chrome-extension://fmlcahmlpfmfnnemigpbbbnmkikepjko");
+    if (origin == s_chromeOrigin ||
         origin.startsWith("moz-extension://") ||
         origin.startsWith("safari-web-extension://")) {
-        return true;
-    }
-    // Tarayıcı eklentisi başlığı varsa izin ver
-    if (!headers.value("x-hbdm-extension").isEmpty()) {
         return true;
     }
     return false;
@@ -288,6 +292,18 @@ void LocalServer::handleRequest(QTcpSocket *socket, const HttpRequest &req) {
         pingObj["version"] = "1.3.0";
         pingObj["ytdlp"] = VideoDownloader::isAvailable();
         pingObj["active"] = DownloadManager::instance().activeCount();
+
+        QUrl queryUrl("http://localhost" + req.m_path);
+        QUrlQuery query(queryUrl);
+        QString nonce = query.queryItemValue("nonce");
+        if (!nonce.isEmpty() && !m_token.isEmpty()) {
+            QByteArray proof = QMessageAuthenticationCode::hash(
+                QString("hbdm-ping:" + nonce).toUtf8(),
+                m_token.toUtf8(),
+                QCryptographicHash::Sha256
+            ).toHex();
+            pingObj["proof"] = QString::fromLatin1(proof);
+        }
 
         QJsonArray extArr;
         QStringList exts = DownloadManager::instance().captureExtensions();

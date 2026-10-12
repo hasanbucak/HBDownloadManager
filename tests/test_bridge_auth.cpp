@@ -10,6 +10,9 @@
 #include <QThread>
 #include <atomic>
 #include <sys/stat.h>
+#include <thread>
+#include <QTemporaryDir>
+#include <QMessageAuthenticationCode>
 #include "LocalServer.h"
 #include "BridgeToken.h"
 
@@ -51,7 +54,9 @@ private slots:
     void cleanupTestCase();
 
     void testTokenCreationAndPermissions();
+    void testTokenCreationRace();
     void testPingWithoutToken();
+    void testPingChallengeResponse();
     void testOptionsCORS();
     void testDownloadsWithoutTokenReturns403();
     void testDownloadsWithWrongTokenReturns403();
@@ -144,6 +149,26 @@ void TestBridgeAuth::testTokenCreationAndPermissions() {
     QCOMPARE(mode, static_cast<mode_t>(0600));
 }
 
+void TestBridgeAuth::testTokenCreationRace() {
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    QString emptyDir = tempDir.path() + "/hb-download-manager";
+
+    QString token1, token2;
+    std::thread t1([&]() {
+        token1 = BridgeToken::getOrCreateToken(emptyDir);
+    });
+    std::thread t2([&]() {
+        token2 = BridgeToken::getOrCreateToken(emptyDir);
+    });
+    t1.join();
+    t2.join();
+
+    QVERIFY(!token1.isEmpty());
+    QVERIFY(!token2.isEmpty());
+    QCOMPARE(token1, token2);
+}
+
 void TestBridgeAuth::testPingWithoutToken() {
     QByteArray req = QString("GET /ping HTTP/1.1\r\n"
                              "Host: 127.0.0.1:%1\r\n"
@@ -153,10 +178,27 @@ void TestBridgeAuth::testPingWithoutToken() {
     QVERIFY(resp.contains("\"ok\":true"));
 }
 
+void TestBridgeAuth::testPingChallengeResponse() {
+    QString nonce = "abcdef0123456789abcdef0123456789";
+    QByteArray req = QString("GET /ping?nonce=%1 HTTP/1.1\r\n"
+                             "Host: 127.0.0.1:%2\r\n"
+                             "Connection: close\r\n\r\n").arg(nonce).arg(m_port).toUtf8();
+    QByteArray resp = sendRawHttpRequest(req);
+    QVERIFY2(resp.startsWith("HTTP/1.1 200 OK"), resp.constData());
+
+    QByteArray expectedProof = QMessageAuthenticationCode::hash(
+        QString("hbdm-ping:" + nonce).toUtf8(),
+        m_thread->token().toUtf8(),
+        QCryptographicHash::Sha256
+    ).toHex();
+
+    QVERIFY2(resp.contains(expectedProof), resp.constData());
+}
+
 void TestBridgeAuth::testOptionsCORS() {
     QByteArray req = QString("OPTIONS /download HTTP/1.1\r\n"
                              "Host: 127.0.0.1:%1\r\n"
-                             "Origin: chrome-extension://afdfemednfkkmmbpliapapodafgbbeme\r\n"
+                             "Origin: chrome-extension://fmlcahmlpfmfnnemigpbbbnmkikepjko\r\n"
                              "Connection: close\r\n\r\n").arg(m_port).toUtf8();
     QByteArray resp = sendRawHttpRequest(req);
     QVERIFY2(resp.startsWith("HTTP/1.1 200 OK"), resp.constData());
