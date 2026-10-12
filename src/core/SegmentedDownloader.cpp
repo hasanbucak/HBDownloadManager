@@ -1,5 +1,6 @@
 #include "SegmentedDownloader.h"
 #include "PathUtils.h"
+#include "RangePlanner.h"
 #include <QDebug>
 #include <QDir>
 #include <QFileInfo>
@@ -39,38 +40,17 @@ bool SegmentedDownloader::validateContentRangeHeader(const QString &header,
                                                      qint64 totalBytes,
                                                      qint64 *rangeFirstOut,
                                                      qint64 *rangeLastOut) {
-    static const QRegularExpression re(QStringLiteral(R"(^bytes\s+(\d+)-(\d+)/(\d+|\*)$)"), QRegularExpression::CaseInsensitiveOption);
-    QRegularExpressionMatch match = re.match(header.trimmed());
-    if (!match.hasMatch()) {
-        return false;
+    return RangePlanner::validateContentRangeHeader(header, expectedStart, segEnd, totalBytes, rangeFirstOut, rangeLastOut);
+}
+
+QString SegmentedDownloader::uniqueTargetPath(const QString &baseDir, const QString &fileName, const QString &id) {
+    return PathUtils::uniqueTargetPath(baseDir, fileName, id);
+}
+
+void SegmentedDownloader::syncToDisk() {
+    if (m_fileFd >= 0) {
+        ::fdatasync(m_fileFd);
     }
-
-    qint64 first = match.captured(1).toLongLong();
-    qint64 last = match.captured(2).toLongLong();
-
-    if (rangeFirstOut) *rangeFirstOut = first;
-    if (rangeLastOut) *rangeLastOut = last;
-
-    if (expectedStart >= 0 && first != expectedStart) {
-        return false;
-    }
-
-    if (segEnd >= 0 && last > segEnd) {
-        return false;
-    }
-
-    if (first > last) {
-        return false;
-    }
-
-    QString totalStr = match.captured(3);
-    if (totalStr != QLatin1String("*") && totalBytes > 0) {
-        if (totalStr.toLongLong() != totalBytes) {
-            return false;
-        }
-    }
-
-    return true;
 }
 
 SegmentedDownloader::SegmentedDownloader(const DownloadItem &item, QObject *parent)
@@ -80,14 +60,19 @@ SegmentedDownloader::SegmentedDownloader(const DownloadItem &item, QObject *pare
       m_probeReply(NULL),
       m_singleReply(NULL),
       m_singleValidated(false),
+      m_singleLaunchTime(0),
       m_singleLastActivity(0),
+      m_singleWithHeaders(false),
       m_singleRetries(0),
+      m_singleConnectFailures(0),
+      m_fullRestarts(0),
       m_fileFd(-1),
       m_stopped(false),
       m_finished(false),
       m_speedTimer(new QTimer(this)),
       m_bytesInInterval(0),
       m_lastReportTime(0) {
+    m_elapsedTimer.start();
     connect(m_speedTimer, SIGNAL(timeout()), this, SLOT(onSpeedTimerTimeout()));
 }
 
@@ -104,7 +89,8 @@ void SegmentedDownloader::start() {
     bool canResume = (m_item.m_totalBytes > 0)
                      && (m_item.m_supportsRanges)
                      && (!m_item.m_segments.isEmpty())
-                     && QFile::exists(m_item.partFilePath());
+                     && QFile::exists(m_item.partFilePath())
+                     && (QFileInfo(m_item.partFilePath()).size() == m_item.m_totalBytes);
 
     if (canResume) {
         if (!openPartFile(false)) {
@@ -360,19 +346,10 @@ void SegmentedDownloader::handleProbeReply(QNetworkReply *reply) {
 
     qint64 minSegmentSize = 512 * 1024;
     int targetSegments = m_item.m_requestedSegments > 0 ? m_item.m_requestedSegments : 8;
-    int count = ranges ? qMax(1, qMin(targetSegments, static_cast<int>(total / minSegmentSize))) : 1;
+    targetSegments = qBound(1, targetSegments, 16);
 
-    if (ranges && count >= 1 && total > 0) {
-        m_item.m_segments.clear();
-        qint64 segSize = total / count;
-        for (int i = 0; i < count; ++i) {
-            SegmentInfo s;
-            s.m_index = i;
-            s.m_start = i * segSize;
-            s.m_end = (i == count - 1) ? (total - 1) : (s.m_start + segSize - 1);
-            s.m_received = 0;
-            m_item.m_segments.append(s);
-        }
+    if (ranges && total > 0) {
+        m_item.m_segments = RangePlanner::planAdaptive(total, targetSegments, minSegmentSize, ranges);
 
         if (!openPartFile(true)) {
             if (!m_finished) {
@@ -407,6 +384,9 @@ bool SegmentedDownloader::openPartFile(bool preallocate) {
     }
 
     if (preallocate && m_item.m_totalBytes > 0) {
+        if (::ftruncate(m_fileFd, m_item.m_totalBytes) != 0) {
+            qWarning() << "ftruncate before fallocate failed:" << errno;
+        }
         int ret = ::posix_fallocate(m_fileFd, 0, m_item.m_totalBytes);
         if (ret != 0) {
             if (ret == ENOSPC) {
@@ -432,10 +412,20 @@ void SegmentedDownloader::closePartFile() {
 }
 
 void SegmentedDownloader::startMultiSegment() {
+    m_pendingSegments.clear();
     for (int i = 0; i < m_item.m_segments.size(); ++i) {
         if (!m_item.m_segments.at(i).isDone()) {
-            launchSegment(i);
+            m_pendingSegments.append(i);
         }
+    }
+    launchPending();
+}
+
+void SegmentedDownloader::launchPending() {
+    while (!m_stopped && !m_finished
+           && m_segmentReplies.size() < s_maxParallelReplies
+           && !m_pendingSegments.isEmpty()) {
+        launchSegment(m_pendingSegments.takeFirst());
     }
 }
 
@@ -451,10 +441,20 @@ void SegmentedDownloader::launchSegment(int index) {
     QNetworkReply *reply = m_nam->get(req);
     m_segmentReplies[reply] = index;
     m_replyExpectedStart[reply] = currentOffset;
-    m_replyLastActivity[reply] = QDateTime::currentMSecsSinceEpoch();
+    qint64 now = m_elapsedTimer.elapsed();
+    m_replyLaunchTime[reply] = now;
+    m_replyLastActivity[reply] = now;
 
+    connect(reply, SIGNAL(metaDataChanged()), this, SLOT(onSegmentMetaDataChanged()));
     connect(reply, SIGNAL(readyRead()), this, SLOT(onSegmentReadyRead()));
     connect(reply, SIGNAL(finished()), this, SLOT(onSegmentFinished()));
+}
+
+void SegmentedDownloader::onSegmentMetaDataChanged() {
+    QNetworkReply *reply = qobject_cast<QNetworkReply*>(sender());
+    if (reply == NULL || !m_segmentReplies.contains(reply)) return;
+    m_repliesWithHeaders.insert(reply);
+    m_replyLastActivity[reply] = m_elapsedTimer.elapsed();
 }
 
 bool SegmentedDownloader::validateSegmentReply(QNetworkReply *reply, const SegmentInfo &seg) {
@@ -466,12 +466,15 @@ bool SegmentedDownloader::validateSegmentReply(QNetworkReply *reply, const Segme
     if (status == 200) {
         qWarning() << "Server returned HTTP 200 on Range request. Falling back to single stream.";
         m_item.m_supportsRanges = false;
+        m_pendingSegments.clear();
 
         QList<QNetworkReply*> replies = m_segmentReplies.keys();
         m_segmentReplies.clear();
         m_replyExpectedStart.clear();
         m_validatedReplies.clear();
+        m_replyLaunchTime.clear();
         m_replyLastActivity.clear();
+        m_repliesWithHeaders.clear();
         for (int i = 0; i < replies.size(); ++i) {
             QNetworkReply *r = replies.at(i);
             if (r != NULL) {
@@ -507,10 +510,13 @@ bool SegmentedDownloader::validateSegmentReply(QNetworkReply *reply, const Segme
         m_segmentReplies.remove(reply);
         m_replyExpectedStart.remove(reply);
         m_validatedReplies.remove(reply);
+        m_replyLaunchTime.remove(reply);
         m_replyLastActivity.remove(reply);
+        m_repliesWithHeaders.remove(reply);
 
         if (segIndex >= 0) {
             scheduleRetry(segIndex, tr("Geçersiz HTTP yanıtı: %1").arg(status));
+            launchPending();
         } else {
             failDownload(tr("Geçersiz HTTP yanıtı: %1").arg(status));
         }
@@ -532,10 +538,13 @@ bool SegmentedDownloader::validateSegmentReply(QNetworkReply *reply, const Segme
         m_segmentReplies.remove(reply);
         m_replyExpectedStart.remove(reply);
         m_validatedReplies.remove(reply);
+        m_replyLaunchTime.remove(reply);
         m_replyLastActivity.remove(reply);
+        m_repliesWithHeaders.remove(reply);
 
         if (segIndex >= 0) {
             scheduleRetry(segIndex, tr("Geçersiz Content-Range başlığı veya aralık uyuşmazlığı"));
+            launchPending();
         }
         return false;
     }
@@ -547,6 +556,9 @@ void SegmentedDownloader::onSegmentReadyRead() {
     QNetworkReply *reply = qobject_cast<QNetworkReply*>(sender());
     if (reply == NULL || !m_segmentReplies.contains(reply)) return;
     if (m_fileFd < 0) return;
+
+    m_repliesWithHeaders.insert(reply);
+    m_replyLastActivity[reply] = m_elapsedTimer.elapsed();
 
     int segIndex = m_segmentReplies.value(reply);
     SegmentInfo &seg = m_item.m_segments[segIndex];
@@ -579,7 +591,6 @@ void SegmentedDownloader::onSegmentReadyRead() {
 
     // Segment made progress: reset retry counter & update activity timestamp
     m_segmentRetries[segIndex] = 0;
-    m_replyLastActivity[reply] = QDateTime::currentMSecsSinceEpoch();
 }
 
 void SegmentedDownloader::onSegmentFinished() {
@@ -594,18 +605,30 @@ void SegmentedDownloader::onSegmentFinished() {
     int segIndex = m_segmentReplies.take(reply);
     m_replyExpectedStart.remove(reply);
     m_validatedReplies.remove(reply);
+    m_replyLaunchTime.remove(reply);
     m_replyLastActivity.remove(reply);
+    bool hadHeaders = m_repliesWithHeaders.remove(reply);
     reply->deleteLater();
 
     if (m_stopped || m_finished) return;
 
     const SegmentInfo &seg = m_item.m_segments.at(segIndex);
     if (reply->error() != QNetworkReply::NoError || !seg.isDone()) {
+        if (!hadHeaders && seg.m_received == 0) {
+            int cFail = m_connectFailures.value(segIndex, 0) + 1;
+            m_connectFailures[segIndex] = cFail;
+            if (cFail > s_maxConnectFailures) {
+                failDownload(tr("Sunucu yanıt vermiyor (bağlantı zaman aşımı): %1").arg(reply->errorString()));
+                return;
+            }
+        }
         scheduleRetry(segIndex, reply->error() != QNetworkReply::NoError ? reply->errorString() : tr("Segment eksik tamamlandı"));
+        launchPending();
         return;
     }
 
     checkAllSegmentsCompleted();
+    launchPending();
 }
 
 void SegmentedDownloader::scheduleRetry(int segIndex, const QString &reason) {
@@ -618,7 +641,10 @@ void SegmentedDownloader::scheduleRetry(int segIndex, const QString &reason) {
         int delayMs = 1000 * retries;
         QTimer::singleShot(delayMs, this, [this, segIndex]() {
             if (!m_stopped && !m_finished) {
-                launchSegment(segIndex);
+                if (!m_pendingSegments.contains(segIndex)) {
+                    m_pendingSegments.append(segIndex);
+                }
+                launchPending();
             }
         });
     } else {
@@ -642,16 +668,28 @@ void SegmentedDownloader::startSingleStream() {
     }
 
     m_singleValidated = false;
+    m_singleWithHeaders = false;
     QNetworkRequest req = createRequest(m_item.m_url, rangeHeader);
     m_singleReply = m_nam->get(req);
-    m_singleLastActivity = QDateTime::currentMSecsSinceEpoch();
+    qint64 now = m_elapsedTimer.elapsed();
+    m_singleLaunchTime = now;
+    m_singleLastActivity = now;
 
+    connect(m_singleReply, SIGNAL(metaDataChanged()), this, SLOT(onSingleMetaDataChanged()));
     connect(m_singleReply, SIGNAL(readyRead()), this, SLOT(onSingleReadyRead()));
     connect(m_singleReply, SIGNAL(finished()), this, SLOT(onSingleFinished()));
 }
 
+void SegmentedDownloader::onSingleMetaDataChanged() {
+    m_singleWithHeaders = true;
+    m_singleLastActivity = m_elapsedTimer.elapsed();
+}
+
 void SegmentedDownloader::onSingleReadyRead() {
     if (m_singleReply == NULL || m_fileFd < 0) return;
+
+    m_singleWithHeaders = true;
+    m_singleLastActivity = m_elapsedTimer.elapsed();
 
     if (!m_singleValidated) {
         m_singleValidated = true;
@@ -664,15 +702,32 @@ void SegmentedDownloader::onSingleReadyRead() {
 
         if (status == 200 && m_item.m_receivedBytes > 0) {
             // Server ignored Range request on resume: reset and restart from 0
+            m_fullRestarts++;
+            if (m_fullRestarts > 3) {
+                failDownload(tr("Sunucu aralık isteklerini reddediyor ve baştan başlatma sınırı aşıldı"));
+                return;
+            }
+            if (m_singleReply->hasRawHeader("Content-Length")) {
+                m_item.m_totalBytes = m_singleReply->rawHeader("Content-Length").toLongLong();
+            } else {
+                m_item.m_totalBytes = -1;
+            }
             m_item.m_supportsRanges = false;
             m_item.m_receivedBytes = 0;
             if (m_fileFd >= 0) {
                 if (::ftruncate(m_fileFd, 0) != 0) {
-                qWarning() << "ftruncate failed:" << errno;
-            }
+                    qWarning() << "ftruncate failed:" << errno;
+                }
                 ::lseek(m_fileFd, 0, SEEK_SET);
             }
-        } else if (status != 200 && status != 206) {
+        } else if (status == 206) {
+            // D7: Validate Content-Range header on single-stream 206
+            QString crHeader = QString::fromLatin1(m_singleReply->rawHeader("Content-Range")).trimmed();
+            if (!RangePlanner::validateContentRangeHeader(crHeader, m_item.m_receivedBytes, -1, m_item.m_totalBytes)) {
+                failDownload(tr("Tek akış yanıtında geçersiz Content-Range başlığı: %1").arg(crHeader));
+                return;
+            }
+        } else if (status != 200) {
             failDownload(tr("Sunucu yanıtı geçersiz (HTTP %1)").arg(status));
             return;
         }
@@ -697,7 +752,6 @@ void SegmentedDownloader::onSingleReadyRead() {
     m_item.m_receivedBytes += data.size();
     m_bytesInInterval += data.size();
     m_singleRetries = 0;
-    m_singleLastActivity = QDateTime::currentMSecsSinceEpoch();
 }
 
 void SegmentedDownloader::onSingleFinished() {
@@ -711,6 +765,13 @@ void SegmentedDownloader::onSingleFinished() {
     if (reply->error() != QNetworkReply::NoError) {
         if (reply->error() == QNetworkReply::OperationCanceledError && (m_stopped || m_finished)) {
             return;
+        }
+        if (!m_singleWithHeaders && m_item.m_receivedBytes == 0) {
+            m_singleConnectFailures++;
+            if (m_singleConnectFailures > s_maxConnectFailures) {
+                failDownload(tr("Sunucu yanıt vermiyor (bağlantı zaman aşımı): %1").arg(reply->errorString()));
+                return;
+            }
         }
         m_singleRetries++;
         if (m_singleRetries <= s_maxRetries) {
@@ -767,35 +828,8 @@ void SegmentedDownloader::checkAllSegmentsCompleted() {
 }
 
 void SegmentedDownloader::applyUniqueFilename() {
-    QString target = PathUtils::safeJoin(m_item.m_directory, m_item.m_fileName);
-    if (target.isEmpty()) {
-        target = QDir(m_item.m_directory).filePath(m_item.m_fileName);
-    }
-    if (!QFile::exists(target)) {
-        m_item.m_finalPath = target;
-        return;
-    }
-
-    QFileInfo info(target);
-    QString baseName = info.completeBaseName();
-    QRegularExpression countRegex(R"(\s\(\d+\)$)");
-    baseName.remove(countRegex);
-    QString suffix = info.suffix();
-    if (!suffix.isEmpty()) suffix = "." + suffix;
-
-    int counter = 1;
-    while (true) {
-        QString candidate = PathUtils::safeJoin(m_item.m_directory, QString("%1 (%2)%3").arg(baseName).arg(counter).arg(suffix));
-        if (candidate.isEmpty()) {
-            candidate = QDir(m_item.m_directory).filePath(QString("%1 (%2)%3").arg(baseName).arg(counter).arg(suffix));
-        }
-        if (!QFile::exists(candidate)) {
-            m_item.m_finalPath = candidate;
-            m_item.m_fileName = QFileInfo(candidate).fileName();
-            return;
-        }
-        counter++;
-    }
+    m_item.m_finalPath = uniqueTargetPath(m_item.m_directory, m_item.m_fileName, m_item.m_id);
+    m_item.m_fileName = QFileInfo(m_item.m_finalPath).fileName();
 }
 
 void SegmentedDownloader::finishDownload() {
@@ -810,29 +844,12 @@ void SegmentedDownloader::finishDownload() {
     bool renameOk = false;
 
     if (QFile::exists(partPath)) {
-        if (QFile::rename(partPath, m_item.m_finalPath)) {
-            renameOk = true;
-        } else {
-            // Target exists or is locked. Pick next 'name (N).ext' and retry.
-            QFileInfo info(m_item.m_finalPath);
-            QString baseName = info.completeBaseName();
-            QRegularExpression countRegex(R"(\s\(\d+\)$)");
-            baseName.remove(countRegex);
-            QString suffix = info.suffix();
-            if (!suffix.isEmpty()) suffix = "." + suffix;
-
-            for (int counter = 1; counter <= 1000; ++counter) {
-                QString candidate = PathUtils::safeJoin(m_item.m_directory, QString("%1 (%2)%3").arg(baseName).arg(counter).arg(suffix));
-                if (candidate.isEmpty()) {
-                    candidate = QDir(m_item.m_directory).filePath(QString("%1 (%2)%3").arg(baseName).arg(counter).arg(suffix));
-                }
-                if (!QFile::exists(candidate) && QFile::rename(partPath, candidate)) {
-                    m_item.m_finalPath = candidate;
-                    m_item.m_fileName = QFileInfo(candidate).fileName();
-                    renameOk = true;
-                    break;
-                }
+        for (int attempt = 0; attempt < 5; ++attempt) {
+            if (QFile::rename(partPath, m_item.m_finalPath)) {
+                renameOk = true;
+                break;
             }
+            applyUniqueFilename();
         }
     } else {
         if (m_item.m_totalBytes == 0) {
@@ -883,11 +900,14 @@ void SegmentedDownloader::failDownload(const QString &error) {
         m_singleReply = NULL;
     }
 
+    m_pendingSegments.clear();
     QList<QNetworkReply*> replies = m_segmentReplies.keys();
     m_segmentReplies.clear();
     m_replyExpectedStart.clear();
     m_validatedReplies.clear();
+    m_replyLaunchTime.clear();
     m_replyLastActivity.clear();
+    m_repliesWithHeaders.clear();
     for (int i = 0; i < replies.size(); ++i) {
         QNetworkReply *reply = replies.at(i);
         if (reply != NULL) {
@@ -922,25 +942,38 @@ void SegmentedDownloader::onSpeedTimerTimeout() {
         emit atProgressUpdated(m_item.m_receivedBytes, m_item.m_totalBytes, m_item.m_speed, m_item.m_segments);
     }
 
-    // Stall detection: check if any reply has had no data for > 30 seconds
-    qint64 currentEpochMs = QDateTime::currentMSecsSinceEpoch();
+    // Monotonic stall and connect timeout detection
     const qint64 stallThresholdMs = 30000;
+    const qint64 connectThresholdMs = 60000;
 
     QList<QNetworkReply*> replies = m_segmentReplies.keys();
     for (int i = 0; i < replies.size(); ++i) {
         QNetworkReply *reply = replies.at(i);
-        if (reply != NULL && m_replyLastActivity.contains(reply)) {
-            if (currentEpochMs - m_replyLastActivity.value(reply) > stallThresholdMs) {
+        if (reply == NULL) continue;
+        if (m_repliesWithHeaders.contains(reply)) {
+            if (now - m_replyLastActivity.value(reply, now) > stallThresholdMs) {
                 qWarning() << "Segment reply stalled for >30s, aborting to trigger retry";
+                reply->abort();
+            }
+        } else {
+            if (now - m_replyLaunchTime.value(reply, now) > connectThresholdMs) {
+                qWarning() << "Segment reply connect timed out for >60s, aborting";
                 reply->abort();
             }
         }
     }
 
-    if (m_singleReply != NULL && m_singleLastActivity > 0) {
-        if (currentEpochMs - m_singleLastActivity > stallThresholdMs) {
-            qWarning() << "Single stream reply stalled for >30s, aborting to trigger retry";
-            m_singleReply->abort();
+    if (m_singleReply != NULL) {
+        if (m_singleWithHeaders) {
+            if (now - m_singleLastActivity > stallThresholdMs) {
+                qWarning() << "Single stream reply stalled for >30s, aborting to trigger retry";
+                m_singleReply->abort();
+            }
+        } else {
+            if (now - m_singleLaunchTime > connectThresholdMs) {
+                qWarning() << "Single stream connect timed out for >60s, aborting";
+                m_singleReply->abort();
+            }
         }
     }
 }

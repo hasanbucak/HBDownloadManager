@@ -1,10 +1,12 @@
 #include <QTest>
+#include <QStandardPaths>
 #include "RangePlanner.h"
 
 class TestRangePlanner : public QObject {
     Q_OBJECT
 
 private slots:
+    void initTestCase();
     void testOneByteRanges();
     void test511KiBRanges();
     void test512KiBRanges();
@@ -15,6 +17,10 @@ private slots:
 private:
     void verifyExactCoverage(qint64 totalBytes, int requestedSegments);
 };
+
+void TestRangePlanner::initTestCase() {
+    QStandardPaths::setTestModeEnabled(true);
+}
 
 void TestRangePlanner::verifyExactCoverage(qint64 totalBytes, int requestedSegments) {
     const QList<SegmentInfo> segments = RangePlanner::planRanges(totalBytes, requestedSegments);
@@ -148,6 +154,10 @@ void TestRangePlanner::testContentRangeValidation() {
     // Valid 206 Partial Content range
     QVERIFY(RangePlanner::validateContentRange(206, QStringLiteral("bytes 0-499/1000"), 0, 499, 1000));
     QVERIFY(RangePlanner::validateContentRange(206, QStringLiteral("bytes 500-999/1000"), 500, 999, 1000));
+
+    // Case-insensitive verification (BYTES)
+    QVERIFY(RangePlanner::validateContentRange(206, QStringLiteral("BYTES 0-499/1000"), 0, 499, 1000));
+    QVERIFY(RangePlanner::validateContentRange(206, QStringLiteral("Bytes 500-999/1000"), 500, 999, 1000));
 
     // Valid with wildcard remote size
     QVERIFY(RangePlanner::validateContentRange(206, QStringLiteral("bytes 0-499/*"), 0, 499, 1000));

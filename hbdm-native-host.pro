@@ -7,4 +7,6 @@ TARGET = hbdm-native-host
 
 OBJECTS_DIR = build_host_obj
 
+INCLUDEPATH += src/utils
+
 SOURCES += src/native_host/native_host_main.cpp

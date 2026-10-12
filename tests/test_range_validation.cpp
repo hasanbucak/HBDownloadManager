@@ -3,12 +3,14 @@
 #include <QTemporaryFile>
 #include <fcntl.h>
 #include <unistd.h>
+#include <QStandardPaths>
 #include "SegmentedDownloader.h"
 
 class TestRangeValidation : public QObject {
     Q_OBJECT
 
 private slots:
+    void initTestCase();
     void testGoodContentRange();
     void testWrongStartContentRange();
     void testEndExceedsSegmentEnd();
@@ -17,6 +19,10 @@ private slots:
     void testMalformedHeaders();
     void testWriteFully();
 };
+
+void TestRangeValidation::initTestCase() {
+    QStandardPaths::setTestModeEnabled(true);
+}
 
 void TestRangeValidation::testGoodContentRange() {
     qint64 first = -1;

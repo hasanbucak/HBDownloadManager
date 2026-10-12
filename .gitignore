@@ -22,6 +22,7 @@ test_json_roundtrip
 test_download_lifecycle
 test_range_validation
 test_bridge_auth
+test_engine_integration
 target_wrapper.sh
 
 # Test Artifacts

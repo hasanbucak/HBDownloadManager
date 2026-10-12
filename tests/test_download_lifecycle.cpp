@@ -25,7 +25,9 @@ private slots:
 };
 
 void TestDownloadLifecycle::initTestCase() {
-    // Ensure QCoreApplication exists for aboutToQuit connects
+    QStandardPaths::setTestModeEnabled(true);
+    QString configDir = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation) + "/hb-download-manager";
+    QVERIFY2(!configDir.startsWith(QDir::homePath() + "/.config/"), "Safety assertion failed: test mode not isolating config path!");
     QVERIFY(QCoreApplication::instance() != NULL);
 }
 

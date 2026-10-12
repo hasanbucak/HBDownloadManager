@@ -5,20 +5,25 @@
 #include <QDateTime>
 #include <QTemporaryDir>
 #include <QDir>
+#include <QStandardPaths>
 #include "DownloadItem.h"
 
 class TestJsonRoundtrip : public QObject {
     Q_OBJECT
 
 private slots:
+    void initTestCase();
     void testCompleteItemRoundtrip();
     void testStateTransitions();
     void testKindRoundtrip();
     void testEmptyJsonObject();
     void testCorruptDataTypes();
     void testCorruptJsonDocumentParsing();
-    void testTruncatedJsonStateFileSimulation();
 };
+
+void TestJsonRoundtrip::initTestCase() {
+    QStandardPaths::setTestModeEnabled(true);
+}
 
 void TestJsonRoundtrip::testCompleteItemRoundtrip() {
     QTemporaryDir tempDir;
@@ -201,31 +206,6 @@ void TestJsonRoundtrip::testCorruptJsonDocumentParsing() {
     QJsonDocument doc3 = QJsonDocument::fromJson(garbageJson, &err3);
     QVERIFY(doc3.isNull());
     QVERIFY(err3.error != QJsonParseError::NoError);
-}
-
-void TestJsonRoundtrip::testTruncatedJsonStateFileSimulation() {
-    // Simulates DownloadManager::loadState behavior on corrupt files
-    // When doc.isArray() is false, existing in-memory items must never be wiped.
-    QList<DownloadItem> existingItems;
-    DownloadItem activeItem;
-    activeItem.m_id = QStringLiteral("active-1");
-    existingItems.append(activeItem);
-
-    // Parse corrupt truncated buffer
-    const QByteArray corruptData = "[{\"id\":\"active-1\", \"totalBytes\":";
-    QJsonParseError err;
-    QJsonDocument doc = QJsonDocument::fromJson(corruptData, &err);
-
-    // Safe loader guard check
-    if (doc.isNull() || !doc.isArray()) {
-        // Safe path: do NOT wipe existing items
-    } else {
-        existingItems.clear(); // This dangerous branch should never execute
-    }
-
-    // Existing list remains intact
-    QCOMPARE(existingItems.size(), 1);
-    QCOMPARE(existingItems.first().m_id, QStringLiteral("active-1"));
 }
 
 QTEST_MAIN(TestJsonRoundtrip)

@@ -20,5 +20,10 @@ public:
 
     // Validates Content-Range header from HTTP 206 Partial Content responses.
     static bool validateContentRange(int httpStatus, const QString &contentRangeHeader,
-                                     qint64 expectedStart, qint64 segEnd, qint64 totalBytes);
+                                     qint64 expectedStart, qint64 segEnd, qint64 totalBytes,
+                                     qint64 *rangeFirstOut = NULL, qint64 *rangeLastOut = NULL);
+
+    static bool validateContentRangeHeader(const QString &contentRangeHeader,
+                                           qint64 expectedStart, qint64 segEnd, qint64 totalBytes,
+                                           qint64 *rangeFirstOut = NULL, qint64 *rangeLastOut = NULL);
 };

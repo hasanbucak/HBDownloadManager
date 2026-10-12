@@ -24,3 +24,8 @@ exists(test_bridge_auth.pro) {
     SUBDIRS += test_bridge_auth
     test_bridge_auth.file = test_bridge_auth.pro
 }
+
+exists(test_engine_integration.pro) {
+    SUBDIRS += test_engine_integration
+    test_engine_integration.file = test_engine_integration.pro
+}

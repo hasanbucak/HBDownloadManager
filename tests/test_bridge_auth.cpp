@@ -11,6 +11,7 @@
 #include <atomic>
 #include <sys/stat.h>
 #include "LocalServer.h"
+#include "BridgeToken.h"
 
 class ServerThread : public QThread {
     Q_OBJECT
@@ -67,6 +68,10 @@ private:
 };
 
 void TestBridgeAuth::initTestCase() {
+    QStandardPaths::setTestModeEnabled(true);
+    QString configDir = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + "/hb-download-manager";
+    QVERIFY2(!configDir.startsWith(QDir::homePath() + "/.config/"), "Safety assertion failed: test mode not isolating config path!");
+
     m_port = 49213; // Use distinct port for testing
     m_thread = new ServerThread(m_port, this);
     m_thread->start();
@@ -119,7 +124,7 @@ QByteArray TestBridgeAuth::sendRawHttpRequest(const QByteArray &rawRequest, int 
 }
 
 void TestBridgeAuth::testTokenCreationAndPermissions() {
-    QString tokenPath = QDir::homePath() + "/.config/hb-download-manager/bridge-token";
+    QString tokenPath = BridgeToken::tokenFilePath();
     QVERIFY2(QFile::exists(tokenPath), "bridge-token file must exist");
 
     QFile file(tokenPath);

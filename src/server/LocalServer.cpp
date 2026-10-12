@@ -10,6 +10,7 @@
 #include <QFileInfo>
 #include <QRandomGenerator>
 #include <sys/stat.h>
+#include "BridgeToken.h"
 
 LocalServer::LocalServer(quint16 port, QObject *parent)
     : QObject(parent),
@@ -65,41 +66,7 @@ QString LocalServer::token() const {
 }
 
 void LocalServer::ensureToken() {
-    QString configDir = QDir::homePath() + "/.config/hb-download-manager";
-    QDir().mkpath(configDir);
-    QString tokenPath = configDir + "/bridge-token";
-
-    QFile file(tokenPath);
-    if (file.exists() && file.open(QIODevice::ReadOnly)) {
-        m_token = QString::fromUtf8(file.readAll()).trimmed();
-        file.close();
-    }
-
-    if (m_token.isEmpty()) {
-        QByteArray bytes(32, 0);
-        QFile urandom("/dev/urandom");
-        if (urandom.open(QIODevice::ReadOnly)) {
-            bytes = urandom.read(32);
-            urandom.close();
-        }
-        if (bytes.size() != 32 || bytes == QByteArray(32, 0)) {
-            QRandomGenerator *gen = QRandomGenerator::system();
-            quint32 words[8];
-            for (int i = 0; i < 8; ++i) {
-                words[i] = gen->generate();
-            }
-            bytes = QByteArray(reinterpret_cast<const char*>(words), 32);
-        }
-        m_token = QString::fromLatin1(bytes.toHex());
-
-        if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-            file.write(m_token.toUtf8());
-            file.close();
-        }
-    }
-
-    file.setPermissions(QFile::ReadOwner | QFile::WriteOwner);
-    ::chmod(tokenPath.toLocal8Bit().constData(), S_IRUSR | S_IWUSR);
+    m_token = BridgeToken::getOrCreateToken();
 }
 
 bool LocalServer::isHostAllowed(const QString &rawHost) const {

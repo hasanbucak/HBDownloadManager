@@ -9,11 +9,15 @@ SegmentedDownloader::~SegmentedDownloader() {}
 
 void SegmentedDownloader::start() {}
 void SegmentedDownloader::pause() {}
+void SegmentedDownloader::cancel() {}
+void SegmentedDownloader::syncToDisk() {}
 
 void SegmentedDownloader::onProbeMetaDataChanged() {}
 void SegmentedDownloader::onProbeFinished() {}
+void SegmentedDownloader::onSegmentMetaDataChanged() {}
 void SegmentedDownloader::onSegmentReadyRead() {}
 void SegmentedDownloader::onSegmentFinished() {}
+void SegmentedDownloader::onSingleMetaDataChanged() {}
 void SegmentedDownloader::onSingleReadyRead() {}
 void SegmentedDownloader::onSingleFinished() {}
 void SegmentedDownloader::onSpeedTimerTimeout() {}

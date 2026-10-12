@@ -18,4 +18,7 @@ public:
     // Rejects paths that escape directory (canonical parent must match directory canonical path).
     // Returns empty string if dir is invalid or path would escape.
     static QString safeJoin(const QString &dir, const QString &name);
+
+    // Resolves unique non-colliding target path within 240 UTF-8 bytes limit.
+    static QString uniqueTargetPath(const QString &baseDir, const QString &fileName, const QString &id = QString());
 };

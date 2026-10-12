@@ -34,6 +34,10 @@ public:
     void pause();
     void cancel();
 
+    static const int s_maxParallelReplies = 6;
+    static const int s_maxRetries = 5;
+    static const int s_maxConnectFailures = 5;
+
     static bool writeFully(int fd, const char *data, qint64 size, off64_t offset, int *errOut = NULL);
     static bool validateContentRangeHeader(const QString &header,
                                            qint64 expectedStart,
@@ -41,6 +45,8 @@ public:
                                            qint64 totalBytes,
                                            qint64 *rangeFirstOut = NULL,
                                            qint64 *rangeLastOut = NULL);
+    static QString uniqueTargetPath(const QString &baseDir, const QString &fileName, const QString &id = QString());
+    void syncToDisk();
 
 signals:
     void atProbed(const ProbeResult &result);
@@ -50,8 +56,10 @@ signals:
 private slots:
     void onProbeMetaDataChanged();
     void onProbeFinished();
+    void onSegmentMetaDataChanged();
     void onSegmentReadyRead();
     void onSegmentFinished();
+    void onSingleMetaDataChanged();
     void onSingleReadyRead();
     void onSingleFinished();
     void onSpeedTimerTimeout();
@@ -60,6 +68,7 @@ private:
     void probe();
     void handleProbeReply(QNetworkReply *reply);
     void startMultiSegment();
+    void launchPending();
     void startSingleStream();
     void launchSegment(int index);
     bool validateSegmentReply(QNetworkReply *reply, const SegmentInfo &seg);
@@ -81,13 +90,20 @@ private:
     QNetworkReply *m_singleReply;
     QMap<QNetworkReply*, int> m_segmentReplies;
 
+    QList<int> m_pendingSegments;
     QMap<QNetworkReply*, qint64> m_replyExpectedStart;
     QSet<QNetworkReply*> m_validatedReplies;
+    QMap<QNetworkReply*, qint64> m_replyLaunchTime;
     QMap<QNetworkReply*, qint64> m_replyLastActivity;
+    QSet<QNetworkReply*> m_repliesWithHeaders;
 
     bool m_singleValidated;
+    qint64 m_singleLaunchTime;
     qint64 m_singleLastActivity;
+    bool m_singleWithHeaders;
     int m_singleRetries;
+    int m_singleConnectFailures;
+    int m_fullRestarts;
 
     int m_fileFd;
     bool m_stopped;
@@ -98,6 +114,6 @@ private:
     QElapsedTimer m_elapsedTimer;
     qint64 m_lastReportTime;
 
-    static const int s_maxRetries = 5;
     QMap<int, int> m_segmentRetries;
+    QMap<int, int> m_connectFailures;
 };

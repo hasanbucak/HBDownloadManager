@@ -1,4 +1,5 @@
 #include "PathUtils.h"
+#include <QRegularExpression>
 
 QString PathUtils::sanitizeFileName(const QString &raw) {
     // Percent-decode first to handle RFC 5987 / URL encoded names (e.g. %2F -> /)
@@ -58,6 +59,29 @@ QString PathUtils::safeJoin(const QString &dir, const QString &name) {
         return QString();
     }
 
-    const QString path = QDir(base).filePath(sanitized);
+    const QDir baseDir(base);
+    const QString path = baseDir.filePath(sanitized);
     return (QFileInfo(path).absolutePath() == base) ? path : QString();
+}
+
+QString PathUtils::uniqueTargetPath(const QString &baseDir, const QString &fileName, const QString &id) {
+    const QString cleanName = sanitizeFileName(fileName);
+    const QFileInfo info(cleanName);
+    QString stem = info.completeBaseName();
+    stem.remove(QRegularExpression(QStringLiteral("\\s\\(\\d+\\)$")));
+    const QString ext = info.suffix().isEmpty() ? QString() : QLatin1Char('.') + info.suffix();
+
+    for (int n = 0; n < 10000; ++n) {
+        const QString tag = (n == 0) ? QString() : QStringLiteral(" (%1)").arg(n);
+        QString s = stem;
+        while (!s.isEmpty() && (s + tag + ext).toUtf8().size() > 240) {
+            s.chop(1);
+        }
+        const QString path = QDir(baseDir).filePath(s + tag + ext);
+        const QFileInfo fi(path);
+        if (!fi.exists() && !fi.isSymLink()) {
+            return path;
+        }
+    }
+    return QDir(baseDir).filePath(QStringLiteral("download-%1%2").arg(id.isEmpty() ? QStringLiteral("file") : id, ext));
 }

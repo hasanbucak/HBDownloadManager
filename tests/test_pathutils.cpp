@@ -4,10 +4,13 @@
 #include <QDir>
 #include "PathUtils.h"
 
+#include <QStandardPaths>
+
 class TestPathUtils : public QObject {
     Q_OBJECT
 
 private slots:
+    void initTestCase();
     void testSanitizeRelativeTraversal();
     void testSanitizePercentEncodedTraversal();
     void testSanitizeAbsolutePath();
@@ -18,7 +21,12 @@ private slots:
     void testSafeJoinValid();
     void testSafeJoinRejectsEscape();
     void testSafeJoinInvalidDir();
+    void testUniqueTargetPathLongFileName();
 };
+
+void TestPathUtils::initTestCase() {
+    QStandardPaths::setTestModeEnabled(true);
+}
 
 void TestPathUtils::testSanitizeRelativeTraversal() {
     QCOMPARE(PathUtils::sanitizeFileName(QStringLiteral("../../x")), QStringLiteral("x"));
@@ -130,6 +138,36 @@ void TestPathUtils::testSafeJoinInvalidDir() {
     // Empty directory must return empty string (reject)
     const QString resEmpty = PathUtils::safeJoin(QString(), QStringLiteral("file.txt"));
     QVERIFY(resEmpty.isEmpty());
+}
+
+void TestPathUtils::testUniqueTargetPathLongFileName() {
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    const QString base = tempDir.path();
+
+    // 300-byte file name (R2 regression test)
+    QString longName = QString(296, 'a') + QStringLiteral(".zip");
+    QVERIFY(longName.toUtf8().size() >= 300);
+
+    // First resolution
+    QString firstPath = PathUtils::uniqueTargetPath(base, longName);
+    QVERIFY(!firstPath.isEmpty());
+    QVERIFY(!QFile::exists(firstPath));
+    QVERIFY(QFileInfo(firstPath).fileName().toUtf8().size() <= 240);
+
+    // Create the first file so the second resolution encounters a collision
+    QFile f1(firstPath);
+    QVERIFY(f1.open(QIODevice::WriteOnly));
+    f1.write("test");
+    f1.close();
+
+    // Second resolution: must NOT loop forever, must produce a distinct path
+    QString secondPath = PathUtils::uniqueTargetPath(base, longName);
+    QVERIFY(!secondPath.isEmpty());
+    QVERIFY(secondPath != firstPath);
+    QVERIFY(!QFile::exists(secondPath));
+    QVERIFY(QFileInfo(secondPath).fileName().toUtf8().size() <= 240);
+    QVERIFY(secondPath.contains(QStringLiteral(" (1).zip")));
 }
 
 QTEST_MAIN(TestPathUtils)

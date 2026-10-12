@@ -84,13 +84,19 @@ bool RangePlanner::verifyCoverage(const QList<SegmentInfo> &segments, qint64 tot
 }
 
 bool RangePlanner::validateContentRange(int httpStatus, const QString &contentRangeHeader,
-                                        qint64 expectedStart, qint64 segEnd, qint64 totalBytes) {
+                                        qint64 expectedStart, qint64 segEnd, qint64 totalBytes,
+                                        qint64 *rangeFirstOut, qint64 *rangeLastOut) {
     if (httpStatus != 206) {
         return false; // 200 = Range ignored, 4xx/5xx = error
     }
+    return validateContentRangeHeader(contentRangeHeader, expectedStart, segEnd, totalBytes, rangeFirstOut, rangeLastOut);
+}
 
+bool RangePlanner::validateContentRangeHeader(const QString &contentRangeHeader,
+                                              qint64 expectedStart, qint64 segEnd, qint64 totalBytes,
+                                              qint64 *rangeFirstOut, qint64 *rangeLastOut) {
     // Content-Range: bytes <first>-<last>/<total|*>
-    static const QRegularExpression re(QStringLiteral("^bytes\\s+(\\d+)-(\\d+)/(\\d+|\\*)$"));
+    static const QRegularExpression re(QStringLiteral("^bytes\\s+(\\d+)-(\\d+)/(\\d+|\\*)$"), QRegularExpression::CaseInsensitiveOption);
     const QRegularExpressionMatch m = re.match(contentRangeHeader.trimmed());
     if (!m.hasMatch()) {
         return false;
@@ -111,6 +117,9 @@ bool RangePlanner::validateContentRange(int httpStatus, const QString &contentRa
     if (m.captured(3) != QLatin1String("*") && totalBytes > 0 && m.captured(3).toLongLong() != totalBytes) {
         return false;
     }
+
+    if (rangeFirstOut) *rangeFirstOut = first;
+    if (rangeLastOut)  *rangeLastOut = last;
 
     return true;
 }

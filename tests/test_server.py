@@ -30,6 +30,8 @@ import socketserver
 PAYLOAD_SIZE = 128 * 1024
 TEST_PAYLOAD = bytes([(i * 31 + 17) % 256 for i in range(PAYLOAD_SIZE)])
 PAYLOAD_SHA256 = hashlib.sha256(TEST_PAYLOAD).hexdigest()
+CHANGING_COUNTER = 0
+DROP_HALFWAY_COUNT = 0
 
 class DownloadTestRequestHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -41,16 +43,34 @@ class DownloadTestRequestHandler(BaseHTTPRequestHandler):
 
     def do_HEAD(self):
         parsed_path = self.path.split('?')[0]
-        if parsed_path in ("/normal", "/ignore-range"):
+        if parsed_path in ("/normal", "/ignore-range", "/many-segments", "/drop-halfway"):
             self.send_response(200)
             self.send_header("Content-Type", "application/octet-stream")
             self.send_header("Content-Length", str(len(TEST_PAYLOAD)))
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("ETag", f'"{PAYLOAD_SHA256[:16]}"')
             self.end_headers()
+        elif parsed_path == "/changing":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(TEST_PAYLOAD)))
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("ETag", '"etag-v1"')
+            self.end_headers()
+        elif parsed_path in ("/no-range",):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(TEST_PAYLOAD)))
+            self.end_headers()
         elif parsed_path == "/forbidden":
             self.send_response(403)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+        elif parsed_path == "/stall":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(TEST_PAYLOAD)))
+            self.send_header("Accept-Ranges", "bytes")
             self.end_headers()
         else:
             self.send_response(200)
@@ -104,37 +124,48 @@ class DownloadTestRequestHandler(BaseHTTPRequestHandler):
 
         # Scenario C: Premature connection close halfway
         elif parsed_path == "/drop-halfway":
+            global DROP_HALFWAY_COUNT
+            DROP_HALFWAY_COUNT += 1
             range_header = self.headers.get("Range")
-            target_len = 20000
             start = 0
+            end = len(TEST_PAYLOAD) - 1
             if range_header and range_header.startswith("bytes="):
                 match = re.match(r"bytes=(\d+)-(\d*)", range_header)
                 if match:
                     start = int(match.group(1))
-                    end = int(match.group(2)) if match.group(2) else start + target_len - 1
-                    target_len = end - start + 1
-                    self.send_response(206, "Partial Content")
-                    self.send_header("Content-Range", f"bytes {start}-{start + target_len - 1}/{len(TEST_PAYLOAD)}")
+                    end = int(match.group(2)) if match.group(2) else len(TEST_PAYLOAD) - 1
+                    if end >= len(TEST_PAYLOAD):
+                        end = len(TEST_PAYLOAD) - 1
+
+            chunk = TEST_PAYLOAD[start:end + 1]
+            if range_header:
+                self.send_response(206, "Partial Content")
+                self.send_header("Content-Range", f"bytes {start}-{end}/{len(TEST_PAYLOAD)}")
             else:
                 self.send_response(200, "OK")
 
-            # Advertise target_len, but only write 50% and close connection abruptly
             self.send_header("Content-Type", "application/octet-stream")
-            self.send_header("Content-Length", str(target_len))
-            self.send_header("Connection", "close")
-            self.end_headers()
+            self.send_header("Content-Length", str(len(chunk)))
+            self.send_header("Accept-Ranges", "bytes")
 
-            half_chunk = TEST_PAYLOAD[start:start + (target_len // 2)]
-            self.wfile.write(half_chunk)
-            self.wfile.flush()
-
-            # Abrupt socket termination
-            try:
-                self.connection.shutdown(socket.SHUT_RDWR)
-                self.connection.close()
-            except Exception:
-                pass
-            return
+            if DROP_HALFWAY_COUNT % 2 == 1:
+                # Odd attempt: drop connection after 50%
+                self.send_header("Connection", "close")
+                self.end_headers()
+                half = max(1, len(chunk) // 2)
+                self.wfile.write(chunk[:half])
+                self.wfile.flush()
+                try:
+                    self.connection.shutdown(socket.SHUT_RDWR)
+                    self.connection.close()
+                except Exception:
+                    pass
+                return
+            else:
+                # Even attempt (retry): send full chunk!
+                self.end_headers()
+                self.wfile.write(chunk)
+                return
 
         # Scenario D: 403 Forbidden with HTML body
         elif parsed_path == "/forbidden":
@@ -172,6 +203,90 @@ class DownloadTestRequestHandler(BaseHTTPRequestHandler):
 
             self.end_headers()
             self.wfile.write(dummy_data)
+            return
+
+        elif parsed_path == "/stall":
+            import time
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(TEST_PAYLOAD)))
+            self.end_headers()
+            time.sleep(35)
+            self.wfile.write(TEST_PAYLOAD)
+            return
+
+        elif parsed_path == "/changing":
+            global CHANGING_COUNTER
+            CHANGING_COUNTER += 1
+            if CHANGING_COUNTER <= 1:
+                etag = '"etag-v1"'
+                data = TEST_PAYLOAD
+            else:
+                etag = '"etag-v2"'
+                data = bytes([(b ^ 0xFF) for b in TEST_PAYLOAD])
+
+            range_header = self.headers.get("Range")
+            if range_header and range_header.startswith("bytes="):
+                match = re.match(r"bytes=(\d+)-(\d*)", range_header)
+                if match:
+                    start = int(match.group(1))
+                    end = int(match.group(2)) if match.group(2) else len(data) - 1
+                    if end >= len(data): end = len(data) - 1
+                    chunk = data[start:end + 1]
+                    self.send_response(206, "Partial Content")
+                    self.send_header("Content-Type", "application/octet-stream")
+                    self.send_header("Content-Range", f"bytes {start}-{end}/{len(data)}")
+                    self.send_header("Content-Length", str(len(chunk)))
+                    self.send_header("Accept-Ranges", "bytes")
+                    self.send_header("ETag", etag)
+                    self.end_headers()
+                    self.wfile.write(chunk)
+                    return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("ETag", etag)
+            self.end_headers()
+            self.wfile.write(data)
+            return
+
+        elif parsed_path == "/no-range":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(TEST_PAYLOAD)))
+            self.end_headers()
+            self.wfile.write(TEST_PAYLOAD)
+            return
+
+        elif parsed_path == "/many-segments":
+            import time
+            range_header = self.headers.get("Range")
+            if range_header and range_header.startswith("bytes="):
+                match = re.match(r"bytes=(\d+)-(\d*)", range_header)
+                if match:
+                    start = int(match.group(1))
+                    end = int(match.group(2)) if match.group(2) else len(TEST_PAYLOAD) - 1
+                    if end >= len(TEST_PAYLOAD): end = len(TEST_PAYLOAD) - 1
+                    chunk = TEST_PAYLOAD[start:end + 1]
+                    self.send_response(206, "Partial Content")
+                    self.send_header("Content-Type", "application/octet-stream")
+                    self.send_header("Content-Range", f"bytes {start}-{end}/{len(TEST_PAYLOAD)}")
+                    self.send_header("Content-Length", str(len(chunk)))
+                    self.send_header("Accept-Ranges", "bytes")
+                    self.end_headers()
+                    chunk_sz = 8192
+                    for offset in range(0, len(chunk), chunk_sz):
+                        self.wfile.write(chunk[offset:offset + chunk_sz])
+                        self.wfile.flush()
+                        time.sleep(0.01)
+                    return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(TEST_PAYLOAD)))
+            self.send_header("Accept-Ranges", "bytes")
+            self.end_headers()
+            self.wfile.write(TEST_PAYLOAD)
             return
 
         else:
@@ -279,7 +394,9 @@ def main():
         sys.exit(run_self_test(args.host, 0))
 
     server = ThreadedHTTPServer((args.host, args.port), DownloadTestRequestHandler)
-    print(f"Starting test server on http://{args.host}:{args.port}")
+    actual_port = server.server_address[1]
+    print(f"READY http://{args.host}:{actual_port}", flush=True)
+    print(f"Starting test server on http://{args.host}:{actual_port}", flush=True)
     print("Endpoints available:")
     print("  GET /normal           - 206 Partial Content (or 200 without Range)")
     print("  GET /ignore-range     - 200 OK full body (ignores Range)")
