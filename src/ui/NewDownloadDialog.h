@@ -23,6 +23,8 @@ private slots:
     void onBrowseClicked();
     void onStartClicked();
     void onLaterClicked();
+    void onUrlTextChanged(const QString &text);
+    void onFileNameTextEdited(const QString &text);
 
 private:
     void setupUi();
@@ -39,4 +41,5 @@ private:
     QPushButton *m_cancelBtn;
 
     bool m_startImmediately;
+    bool m_isFileNameAuto;
 };

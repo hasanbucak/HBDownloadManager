@@ -28,6 +28,7 @@ set(SOURCES
     src/core/DownloadManager.cpp
     src/server/LocalServer.cpp
     src/utils/PathUtils.cpp
+    src/utils/MediaHosts.cpp
     src/utils/ClipboardWatcher.cpp
     src/ui/NewDownloadDialog.cpp
     src/ui/DownloadDetailDialog.cpp
@@ -57,6 +58,32 @@ add_executable(hbdm-native-host src/native_host/native_host_main.cpp)
 target_link_libraries(hbdm-native-host PRIVATE
     Qt${QT_VERSION_MAJOR}::Core
 )
+target_include_directories(hbdm-native-host PRIVATE
+    src/server
+)
+
+# P12: Enable CTest and unit test targets
+option(BUILD_TESTS "Build unit tests" ON)
+if(BUILD_TESTS)
+    enable_testing()
+    find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Test QUIET)
+    if(Qt${QT_VERSION_MAJOR}Test_FOUND)
+        add_executable(test_range_validation tests/test_range_validation.cpp src/core/RangePlanner.cpp)
+        target_link_libraries(test_range_validation PRIVATE Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Test)
+        target_include_directories(test_range_validation PRIVATE src src/core)
+        add_test(NAME RangeValidation COMMAND test_range_validation)
+
+        add_executable(test_pathutils tests/test_pathutils.cpp src/utils/PathUtils.cpp src/utils/MediaHosts.cpp)
+        target_link_libraries(test_pathutils PRIVATE Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Test)
+        target_include_directories(test_pathutils PRIVATE src src/utils)
+        add_test(NAME PathUtils COMMAND test_pathutils)
+
+        add_executable(test_json_roundtrip tests/test_json_roundtrip.cpp src/core/DownloadItem.cpp src/utils/PathUtils.cpp)
+        target_link_libraries(test_json_roundtrip PRIVATE Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Test)
+        target_include_directories(test_json_roundtrip PRIVATE src src/core src/utils)
+        add_test(NAME JsonRoundtrip COMMAND test_json_roundtrip)
+    endif()
+endif()
 
 # Kurulum Kuralları (Install rules)
 install(TARGETS hb-download-manager hbdm-native-host

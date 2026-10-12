@@ -20,6 +20,8 @@ public:
     static QString findFfmpeg();
     static QString findNode();
     static bool isAvailable();
+    static QString ytDlpVersion();
+    static bool isFfmpegAvailable();
 
 signals:
     void atTitleDetected(const QString &title);

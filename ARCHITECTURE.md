@@ -28,7 +28,7 @@ Bu doküman, **HB Download Manager** projesinin tüm mimarisini, veri akışlar�
 |  - HTML5 / YouTube / X video algılama          - chrome.downloads.onCreated dinle  |
 |  - Shadow DOM içinde yüzen indirme butonu      - Tarayıcı indirmesini iptal et     |
 |  - Kalite menüsü (1080p, 720p, MP3 vb.)       - Cookie, Referer, User-Agent topla |
-|  - Anlık boyut tahmini (HEAD / probe)          - REST API veya Native Host'a ilet  |
+|  - Anlık boyut tahmini (GET Range bytes=0-0)   - REST API veya Native Host'a ilet  |
 +---------------------------------------+-----------------------------------------+
                                         | HTTP POST /download (127.0.0.1:48213)
                                         | veya STDIN/STDOUT Native Messaging
@@ -58,7 +58,7 @@ Bu doküman, **HB Download Manager** projesinin tüm mimarisini, veri akışlar�
 |              |                                           |                      |
 |              v                                           v                      |
 |   [ SegmentedDownloader ]                       [ VideoDownloader ]             |
-|   - HTTP HEAD (Boyut, Range desteği)            - yt-dlp + ffmpeg alt süreci    |
+|   - HTTP GET Range probe (Boyut/Range/ETag)     - yt-dlp + ffmpeg alt süreci    |
 |   - posix_fallocate (peşin disk alanı)          - --progress-template HBDM_PROG |
 |   - 1-16 QNetworkReply Range iş parçacığı       - MergedChannels (stdout+stderr)|
 |   - pwrite64 (doğrudan atomik blok yazım)       - Canlı byte, ETA, hız ayrıştırma|
@@ -103,7 +103,7 @@ Bu doküman, **HB Download Manager** projesinin tüm mimarisini, veri akışlar�
 
 * **`SegmentedDownloader.h` & `SegmentedDownloader.cpp`**:
   * Standart HTTP/HTTPS çok parçalı indirme motoru.
-  * **Adım 1:** Hedef URL'ye `HEAD` isteği atarak `Content-Length` ve `Accept-Ranges: bytes` başlıklarını sorgular.
+  * **Adım 1:** Hedef URL'ye `GET` isteği ile `Range: bytes=0-0` başlığı atarak `Content-Length`, `Content-Range`, `ETag` ve `Accept-Ranges: bytes` başlıklarını sorgular.
   * **Adım 2:** Sunucu `Range` destekliyorsa, dosya boyutunu `N` eşit parçaya böler. Desteklemiyorsa tek segment (`0` ile dosya sonu) oluşturur.
   * **Adım 3 (Peşin Alan Tahsisi):** `open()` ile hedef dosya açılır ve `posix_fallocate(fd, 0, totalSize)` çağrılır. Bu işlem:
     * Diskteki parçalanmayı (fragmentation) sıfıra indirir.
@@ -126,15 +126,15 @@ Bu doküman, **HB Download Manager** projesinin tüm mimarisini, veri akışlar�
 * **`DownloadManager.h` & `DownloadManager.cpp`**:
   * Tüm indirme sürecini yöneten merkezi kontrolör (orchestrator).
   * İndirme kuyruğunu (`m_items`) ve aktif downloader nesnelerini yönetir.
-  * 1 saniyelik zamanlayıcı (`QTimer`) ile indirme hızlarını günceller ve EMA algoritmasını uygular.
-  * JSON durum dosyasına periyodik kaydeder (`~/.config/hb-download-manager/downloads.json`).
+  * 500 ms zamanlayıcı (`QTimer`) ile indirme hızlarını günceller ve tekil EMA algoritmasını uygular.
+  * 5 saniyede bir aktif downloader'ların tamponlarını diske senkronize edip (`fdatasync`) JSON durum dosyasına periyodik kaydeder (`~/.config/hb-download-manager/downloads.json`).
 
 ---
 
 #### 2. Sunucu ve IPC Katmanı (`src/server/` & `src/native_host/`)
 * **`LocalServer.h` & `LocalServer.cpp`**:
   * `127.0.0.1:48213` IP ve portunu dinleyen yerel HTTP REST sunucusudur (`QTcpServer`).
-  * Güvenlik: Yalnızca `127.0.0.1` bağlantılarını kabul eder. CORS başlıklarında yetkili tarayıcı uzantı ID'lerini ve `X-HBDM-Extension` başlığını kontrol eder.
+  * Güvenlik: Yalnızca `127.0.0.1` bağlantılarını kabul eder (DNS rebinding koruması). Token bazlı kimlik doğrulama (`X-HBDM-Token`) ve tarayıcı eklentisi için HMAC challenge-response protokolü (`/ping` üzerinden rastgele `nonce` ve SHA-256 HMAC kanıtı) uygular. Token dosyasını (`~/.config/hb-download-manager/token`) atomik ve 0600 izinleriyle oluşturur.
   * Uç Noktalar (Endpoints):
     * `GET /ping`: Uygulamanın ayakta olup olmadığını, sürümünü ve yakalanan dosya uzantılarını döner.
     * `GET /downloads`: Aktif ve geçmiş indirmelerin durumunu döner.
@@ -184,7 +184,7 @@ Bu doküman, **HB Download Manager** projesinin tüm mimarisini, veri akışlar�
   * Oynatıcının üzerine izole bir **Shadow DOM** içinde şık bir yüzen indirme butonu yerleştirir.
   * Kalite seçeneklerini ve tahmini dosya boyutlarını sunar.
   * Video indirme tıklandığında `background.js` üzerinden `kind: "video"` bayrağı ile C++ uygulamasına gönderir.
-* **`overlay.css`**: Yüzen butonun karanlık tema IDM stilleri, hover animasyonları ve açılır menü tasarımı.
+  * Yüzen buton stilleri, hover animasyonları ve açılır menü tasarımı doğrudan Shadow DOM içinde izole olarak enjekte edilir.
 
 ---
 
@@ -205,7 +205,7 @@ Geleneksel araçlar her parçayı `part_0.tmp`, `part_1.tmp` gibi ayrı dosyalar
 ### 2. 1 Gbps Üstel Hareketli Ortalama (EMA) Hız Filtresi
 Gigabit internette TCP pencere boyutlarındaki dalgalanmalar nedeniyle ham hız hesabı saniyede onlarca kez sıçrar. Bunu önlemek için EMA filtresi uygulanır:
 $$\text{EMA}_t = \alpha \cdot \text{Hız}_{\text{anlık}} + (1 - \alpha) \cdot \text{EMA}_{t-1}$$
-Burada $\alpha = 0.25$ seçilmiştir. Bu değer, hem ani hız düşüşlerini/artışlarını 1-2 saniye içinde hassas biçimde yakalar hem de saniyelik titreşimleri filtreleyerek kullanıcıya sakin ve okunaklı bir hız değeri sunar.
+Burada $\alpha = 0.35$ seçilmiştir (500 ms aralıkla tekil EMA). Bu değer, hem ani hız düşüşlerini/artışlarını hassas biçimde yakalar hem de saniyelik titreşimleri filtreleyerek kullanıcıya sakin ve okunaklı bir hız değeri sunar.
 
 ### 3. X (Twitter) & HLS Akışlarının Yönetimi
 X (Twitter) ve benzeri sosyal ağlar videoları parçalı HLS (`.m3u8`) akışları olarak sunar. Bu formatta:
@@ -222,7 +222,7 @@ Projedeki tüm C++ sınıfları aşağıdaki standartlara sıkı sıkıya bağl�
 * **Sinyal ve Slot İsimlendirmesi:** Sinyaller `at*` önekiyle (örn. `atProgressUpdated`, `atFinished`), slotlar `on*` önekiyle (örn. `onProgressUpdated`, `onFinished`) adlandırılır.
 * **Açık Sinyal Yayımı:** Sinyaller her zaman `emit atSignalName(...)` şeklinde açık anahtar kelime ile tetiklenir.
 * **Bellek Yönetimi:** Tüm QObject türevi nesneler ebeveyn-çocuk hiyerarşisine (`parent-child`) göre yönetilir; bellek sızıntısı (memory leak) oluşması engellenir.
-* **Yasaklı İfadeler:** Kod tabanında, commit geçmişinde veya dokümanlarda hiçbir harici kişisel isim veya yasaklı referans barındırılmaz; proje ismi **HB Download Manager** (`hb-download-manager`) olarak tescillidir.
+* **Kodlama Standartları:** Kod tabanı ve dokümantasyonda C++17 standartlarına ve kurumsal isimlendirme kurallarına sıkı sıkıya uyulur.
 
 ---
 

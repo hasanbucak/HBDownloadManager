@@ -11,6 +11,7 @@
 #include <QRandomGenerator>
 #include <QMessageAuthenticationCode>
 #include <QUrlQuery>
+#include <QCoreApplication>
 #include <sys/stat.h>
 #include "BridgeToken.h"
 
@@ -289,8 +290,10 @@ void LocalServer::handleRequest(QTcpSocket *socket, const HttpRequest &req) {
         QJsonObject pingObj;
         pingObj["ok"] = true;
         pingObj["app"] = "HBDownloadManager";
-        pingObj["version"] = "1.3.0";
+        pingObj["version"] = QCoreApplication::applicationVersion().isEmpty() ? QStringLiteral("1.3.0") : QCoreApplication::applicationVersion();
         pingObj["ytdlp"] = VideoDownloader::isAvailable();
+        pingObj["ytdlpVersion"] = VideoDownloader::ytDlpVersion();
+        pingObj["ffmpeg"] = VideoDownloader::isFfmpegAvailable();
         pingObj["active"] = DownloadManager::instance().activeCount();
 
         QUrl queryUrl("http://localhost" + req.m_path);

@@ -78,7 +78,7 @@ QString DownloadItem::stateString() const {
     case DownloadStateDownloading: return QObject::tr("İndiriliyor");
     case DownloadStatePaused: return QObject::tr("Duraklatıldı");
     case DownloadStateCompleted: return QObject::tr("Tamamlandı");
-    case DownloadStateError: return m_errorMessage.isEmpty() ? QObject::tr("Hata") : m_errorMessage;
+    case DownloadStateError: return QObject::tr("Hata");
     case DownloadStateCancelled: return QObject::tr("İptal Edildi");
     }
     return QString();

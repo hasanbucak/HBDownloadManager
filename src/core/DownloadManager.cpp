@@ -10,6 +10,7 @@
 #include <QDateTime>
 #include <QTimer>
 #include <QCoreApplication>
+#include <QSettings>
 #include <QDebug>
 #include <sys/stat.h>
 
@@ -50,6 +51,12 @@ DownloadManager::~DownloadManager() {
 }
 
 void DownloadManager::initialize() {
+    QSettings settings("HasanBucak", "hb-download-manager");
+    m_defaultDir = settings.value("defaultDirectory", m_defaultDir).toString();
+    m_defaultSegments = qBound(1, settings.value("defaultSegments", m_defaultSegments).toInt(), 16);
+    m_maxConcurrent = qMax(1, settings.value("maxConcurrentDownloads", m_maxConcurrent).toInt());
+    m_serverPort = static_cast<quint16>(settings.value("serverPort", m_serverPort).toUInt());
+    m_clipboardMonitoring = settings.value("clipboardMonitoring", m_clipboardMonitoring).toBool();
     processQueue();
 }
 
@@ -464,11 +471,7 @@ void DownloadManager::onVideoProgressUpdated(double pct, qint64 totalBytes, qint
         if (!speedStr.isEmpty() && !speedStr.contains("Unknown", Qt::CaseInsensitive) && speedStr != "NA") {
             double currentSpeed = parseSpeedStringToBytes(speedStr);
             if (currentSpeed > 0.0) {
-                if (it->m_speed <= 0.0) {
-                    it->m_speed = currentSpeed;
-                } else {
-                    it->m_speed = 0.35 * currentSpeed + 0.65 * it->m_speed;
-                }
+                it->m_speed = currentSpeed;
             }
         }
         emit atItemUpdated(*it);
@@ -616,18 +619,38 @@ void DownloadManager::loadState() {
 }
 
 QString DownloadManager::defaultDirectory() const { return m_defaultDir; }
-void DownloadManager::setDefaultDirectory(const QString &dir) { m_defaultDir = dir; }
+void DownloadManager::setDefaultDirectory(const QString &dir) {
+    m_defaultDir = dir;
+    QSettings settings("HasanBucak", "hb-download-manager");
+    settings.setValue("defaultDirectory", dir);
+}
 
 int DownloadManager::defaultSegments() const { return m_defaultSegments; }
-void DownloadManager::setDefaultSegments(int count) { m_defaultSegments = qBound(1, count, 16); }
+void DownloadManager::setDefaultSegments(int count) {
+    m_defaultSegments = qBound(1, count, 16);
+    QSettings settings("HasanBucak", "hb-download-manager");
+    settings.setValue("defaultSegments", m_defaultSegments);
+}
 
 int DownloadManager::maxConcurrentDownloads() const { return m_maxConcurrent; }
-void DownloadManager::setMaxConcurrentDownloads(int count) { m_maxConcurrent = qMax(1, count); }
+void DownloadManager::setMaxConcurrentDownloads(int count) {
+    m_maxConcurrent = qMax(1, count);
+    QSettings settings("HasanBucak", "hb-download-manager");
+    settings.setValue("maxConcurrentDownloads", m_maxConcurrent);
+}
 
 quint16 DownloadManager::serverPort() const { return m_serverPort; }
-void DownloadManager::setServerPort(quint16 port) { m_serverPort = port; }
+void DownloadManager::setServerPort(quint16 port) {
+    m_serverPort = port;
+    QSettings settings("HasanBucak", "hb-download-manager");
+    settings.setValue("serverPort", port);
+}
 
 bool DownloadManager::clipboardMonitoringEnabled() const { return m_clipboardMonitoring; }
-void DownloadManager::setClipboardMonitoringEnabled(bool enabled) { m_clipboardMonitoring = enabled; }
+void DownloadManager::setClipboardMonitoringEnabled(bool enabled) {
+    m_clipboardMonitoring = enabled;
+    QSettings settings("HasanBucak", "hb-download-manager");
+    settings.setValue("clipboardMonitoring", enabled);
+}
 
 QStringList DownloadManager::captureExtensions() const { return m_captureExtensions; }

@@ -19,7 +19,7 @@
 * Sunucu `Range` başlığını desteklemediğinde otomatik ve şeffaf olarak tek akışa (`single stream`) düşer.
 
 ### 2. ⏸️ Kusursuz Duraklat ve Devam Et (Pause & Resume)
-* **Büyük Dosyalar:** Her bir parçanın indirilen bayt ofseti anlık olarak JSON durum kütüğüne kaydedilir. İndirme duraklatıldığında veya uygulama yeniden başlatıldığında `.part` dosyasındaki kaldığı bayttan devam eder.
+* **Büyük Dosyalar:** Her bir parçanın indirilen bayt ofseti 5 saniyelik periyotlarla `fdatasync` ile diske yazılır ve JSON durum kütüğüne kaydedilir. Uygulama kapatıldığında veya duraklatıldığında tüm tamponlar anında senkronize edilir; uygulama yeniden başlatıldığında `.part` dosyasındaki kaldığı bayttan devam eder.
 * **Medya Akışları (yt-dlp):** Duraklatıldığında alt süreç `SIGTERM` ile nazikçe sonlandırılarak `.part` dosyasının bütünlüğü korunur. Devam ettirildiğinde `--continue` bayrağı ile kaldığı parçadan devam eder.
 
 ### 3. 🎬 IDM Tarzı Yüzen Video İndirme Butonu (Floating Overlay)
@@ -102,12 +102,17 @@
 * Ubuntu 20.04 / 22.04 / 24.04 veya Debian tabanlı modern Linux dağıtımları
 * Qt 6.x veya Qt 5.15 (`Qt::Core`, `Qt::Gui`, `Qt::Widgets`, `Qt::Network`)
 * GCC / G++ (C++17 destekli)
-* `yt-dlp` ve `ffmpeg` (Medya akış indirmeleri için)
+* `yt-dlp` (Güncel sürüm; Ubuntu apt deposu eski kalabildiğinden resmi ikili veya pip önerilir) ve `ffmpeg`
 
 ```bash
-# Gerekli bağımlılıkları yükleyin
+# Temel sistem ve Qt kütüphaneleri
 sudo apt update
-sudo apt install -y build-essential qt6-base-dev qt6-base-dev-tools yt-dlp ffmpeg
+sudo apt install -y build-essential qt6-base-dev qt6-base-dev-tools ffmpeg
+
+# Güncel yt-dlp kurulumu (Önerilen)
+sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+sudo chmod a+rx /usr/local/bin/yt-dlp
+# Alternatif: pip install -U yt-dlp
 ```
 
 ### Derleme (Build)
@@ -182,12 +187,16 @@ make -j$(nproc)
 
 ## 📡 REST Köprüsü API Belirtimi (`127.0.0.1:48213`)
 
+Köprü, yalnızca yerel makineden (`127.0.0.1`) gelen istekleri kabul eder. Güvenlik için token tabanlı yetkilendirme ve HMAC sınama-yanıt mekanizması kullanılır:
+* **Kimlik Doğrulama:** REST isteklerinde `X-HBDM-Token: <token>` başlığı zorunludur. Token, `~/.config/hb-download-manager/token` dosyasında `0600` izinleriyle saklanır.
+* **HMAC Sınama-Yanıt (Challenge-Response):** Eklenti, `/ping?nonce=<rastgele>` çağrısıyla tek kullanımlık bir sınama gönderir. Yerel sunucu `HMAC-SHA256("hbdm-ping:" + nonce, token)` yanıtını döner. Eklenti doğrulamadan sonra hiçbir oturum çerezi veya token göndermez.
+
 | Metot | Uç Nokta | Açıklama |
 |---|---|---|
-| `GET` | `/ping` | Servis durumu, sürüm, aktif indirmeler ve dosya türü listesi |
-| `GET` | `/downloads` | Son 50 indirmenin durum, hız, yüzde ve boyut bilgileri |
-| `POST` | `/download` | Yeni indirme başlatır (`url`, `filename`, `cookies`, `kind`, `quality`, vb.) |
-| `POST` | `/action` | İndirmeyi yönetir (`id`, `action: "pause" \| "resume" \| "cancel" \| "remove"`) |
+| `GET` | `/ping` | Servis durumu, sürüm, yt-dlp/ffmpeg varlığı, aktif indirmeler ve HMAC kanıtı |
+| `GET` | `/downloads` | Son 50 indirmenin durum, hız, yüzde ve boyut bilgileri (Token zorunlu) |
+| `POST` | `/download` | Yeni indirme başlatır (`url`, `filename`, `cookies`, `kind`, `quality`, vb.) (Token zorunlu) |
+| `POST` | `/action` | İndirmeyi yönetir (`id`, `action: "pause" \| "resume" \| "cancel" \| "remove"`) (Token zorunlu) |
 
 ---
 

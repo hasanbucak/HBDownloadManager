@@ -34,3 +34,5 @@ void VideoDownloader::onProcessReadyRead() {}
 void VideoDownloader::onProcessFinished(int, QProcess::ExitStatus) {}
 
 bool VideoDownloader::isAvailable() { return false; }
+QString VideoDownloader::ytDlpVersion() { return QString(); }
+bool VideoDownloader::isFfmpegAvailable() { return false; }

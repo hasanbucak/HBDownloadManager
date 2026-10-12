@@ -111,4 +111,4 @@ make -f Makefile.host -j$(nproc)
 | `POST` | `/download` | `{ url, filename, referer, userAgent, cookieHeader, cookies, kind, quality, segments }` |
 | `POST` | `/action` | `{ id, action: "pause" \| "resume" \| "cancel" \| "remove" }` |
 
-*Köprü yalnızca yetkili tarayıcı uzantılarından gelen CORS isteklerini kabul eder.*
+*Köprü, token tabanlı kimlik doğrulama (`X-HBDM-Token`) ve tarayıcı eklentisi için HMAC challenge-response protokolü ile korunur.*

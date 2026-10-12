@@ -9,6 +9,7 @@
 #include <QFileInfo>
 #include <QLabel>
 #include <QGroupBox>
+#include <QMessageBox>
 
 NewDownloadDialog::NewDownloadDialog(const QUrl &url, QWidget *parent)
     : QDialog(parent),
@@ -22,7 +23,8 @@ NewDownloadDialog::NewDownloadDialog(const QUrl &url, QWidget *parent)
       m_startBtn(new QPushButton(tr("Hemen İndir"), this)),
       m_laterBtn(new QPushButton(tr("Daha Sonra İndir"), this)),
       m_cancelBtn(new QPushButton(tr("İptal"), this)),
-      m_startImmediately(true) {
+      m_startImmediately(true),
+      m_isFileNameAuto(true) {
     setupUi();
 
     if (url.isValid()) {
@@ -42,6 +44,17 @@ NewDownloadDialog::NewDownloadDialog(const QUrl &url, QWidget *parent)
 
     m_directoryEdit->setText(DownloadManager::instance().defaultDirectory());
 
+    // U7: Pre-select segment combo index based on defaultSegments()
+    int defSegs = DownloadManager::instance().defaultSegments();
+    for (int i = 0; i < m_segmentsCombo->count(); ++i) {
+        if (m_segmentsCombo->itemData(i).toInt() == defSegs) {
+            m_segmentsCombo->setCurrentIndex(i);
+            break;
+        }
+    }
+
+    connect(m_urlEdit, SIGNAL(textChanged(QString)), this, SLOT(onUrlTextChanged(QString)));
+    connect(m_fileNameEdit, SIGNAL(textEdited(QString)), this, SLOT(onFileNameTextEdited(QString)));
     connect(m_browseBtn, SIGNAL(clicked()), this, SLOT(onBrowseClicked()));
     connect(m_startBtn, SIGNAL(clicked()), this, SLOT(onStartClicked()));
     connect(m_laterBtn, SIGNAL(clicked()), this, SLOT(onLaterClicked()));
@@ -92,6 +105,26 @@ void NewDownloadDialog::setupUi() {
     mainLayout->addLayout(btnLayout);
 }
 
+void NewDownloadDialog::onUrlTextChanged(const QString &text) {
+    QUrl u(text.trimmed());
+    if (u.isValid() && (u.scheme() == "http" || u.scheme() == "https") && !u.host().isEmpty()) {
+        if (m_fileNameEdit->text().isEmpty() || m_isFileNameAuto) {
+            QString n = QFileInfo(u.path()).fileName();
+            if (n.isEmpty()) n = "download";
+            m_fileNameEdit->setText(n);
+            m_isFileNameAuto = true;
+        }
+        if (MediaHosts::isStreamingSite(u.host())) {
+            m_videoRadio->setChecked(true);
+        }
+    }
+}
+
+void NewDownloadDialog::onFileNameTextEdited(const QString &text) {
+    Q_UNUSED(text);
+    m_isFileNameAuto = false;
+}
+
 void NewDownloadDialog::onBrowseClicked() {
     QString dir = QFileDialog::getExistingDirectory(this, tr("İndirme Dizinini Seç"), m_directoryEdit->text());
     if (!dir.isEmpty()) {
@@ -114,6 +147,12 @@ DownloadItem NewDownloadDialog::downloadItem() const {
 }
 
 void NewDownloadDialog::onStartClicked() {
+    QUrl url(m_urlEdit->text().trimmed());
+    if (!url.isValid() || (url.scheme() != "http" && url.scheme() != "https") || url.host().isEmpty()) {
+        QMessageBox::warning(this, tr("Geçersiz Bağlantı"), tr("Lütfen geçerli bir http veya https bağlantısı girin."));
+        return;
+    }
+
     m_startImmediately = true;
     DownloadItem item = downloadItem();
     emit atDownloadConfirmed(item, true);
@@ -121,6 +160,12 @@ void NewDownloadDialog::onStartClicked() {
 }
 
 void NewDownloadDialog::onLaterClicked() {
+    QUrl url(m_urlEdit->text().trimmed());
+    if (!url.isValid() || (url.scheme() != "http" && url.scheme() != "https") || url.host().isEmpty()) {
+        QMessageBox::warning(this, tr("Geçersiz Bağlantı"), tr("Lütfen geçerli bir http veya https bağlantısı girin."));
+        return;
+    }
+
     m_startImmediately = false;
     DownloadItem item = downloadItem();
     emit atDownloadConfirmed(item, false);

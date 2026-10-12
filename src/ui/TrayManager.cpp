@@ -4,6 +4,7 @@
 #include "../core/DownloadManager.h"
 #include <QApplication>
 #include <QIcon>
+#include <QMessageBox>
 
 TrayManager::TrayManager(MainWindow *mainWindow, QObject *parent)
     : QObject(parent),
@@ -94,6 +95,17 @@ void TrayManager::onResumeAllClicked() {
 }
 
 void TrayManager::onQuitClicked() {
+    if (DownloadManager::instance().activeCount() > 0) {
+        int ret = QMessageBox::question(
+            m_mainWindow, tr("Çıkış Onayı"),
+            tr("Aktif indirmeler devam ediyor. Uygulamadan çıkmak istediğinizden emin misiniz?"),
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No
+        );
+        if (ret != QMessageBox::Yes) {
+            return;
+        }
+    }
     DownloadManager::instance().pauseAll();
     QApplication::quit();
 }

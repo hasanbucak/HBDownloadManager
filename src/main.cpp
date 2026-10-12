@@ -15,6 +15,8 @@
 #include <QDir>
 #include <QStandardPaths>
 #include <QSocketNotifier>
+#include <QTranslator>
+#include <QLocale>
 #include <csignal>
 #include <sys/socket.h>
 
@@ -34,6 +36,19 @@ int main(int argc, char *argv[]) {
     app.setOrganizationName("HasanBucak");
     app.setOrganizationDomain("hasanbucak.com");
     app.setWindowIcon(QIcon(":/icons/app_icon.png"));
+
+    // U13: Load localization translator based on system locale
+    QTranslator translator;
+    const QStringList uiLanguages = QLocale::system().uiLanguages();
+    for (const QString &locale : uiLanguages) {
+        const QString baseName = "hbdm_" + QLocale(locale).name();
+        if (translator.load(":/i18n/" + baseName) ||
+            translator.load(baseName, QCoreApplication::applicationDirPath() + "/translations") ||
+            translator.load(baseName, "/usr/share/hb-download-manager/translations")) {
+            app.installTranslator(&translator);
+            break;
+        }
+    }
 
     // D6: Self-pipe pattern for clean termination on SIGTERM, SIGHUP, SIGINT
     if (::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, s_sigFd) == 0) {

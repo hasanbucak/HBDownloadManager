@@ -1,8 +1,15 @@
 #include "ClipboardWatcher.h"
+#include "MediaHosts.h"
 #include "../core/DownloadManager.h"
 #include <QGuiApplication>
 #include <QFileInfo>
-#include <QRegularExpression>
+#include <QSet>
+
+static QSet<QString> s_ignoredUrls;
+
+void ClipboardWatcher::ignoreUrl(const QString &url) {
+    s_ignoredUrls.insert(url.trimmed());
+}
 
 ClipboardWatcher::ClipboardWatcher(QObject *parent)
     : QObject(parent),
@@ -17,10 +24,16 @@ ClipboardWatcher::~ClipboardWatcher() {
 }
 
 void ClipboardWatcher::onClipboardChanged() {
-    if (!m_enabled || m_clipboard == NULL) return;
+    if (!m_enabled || !DownloadManager::instance().clipboardMonitoringEnabled() || m_clipboard == NULL) return;
 
     QString text = m_clipboard->text().trimmed();
     if (text.isEmpty() || text == m_lastUrl) return;
+
+    if (s_ignoredUrls.contains(text)) {
+        s_ignoredUrls.remove(text);
+        m_lastUrl = text;
+        return;
+    }
 
     QUrl url(text);
     if (!url.isValid() || (url.scheme() != "http" && url.scheme() != "https")) return;
@@ -32,6 +45,8 @@ void ClipboardWatcher::onClipboardChanged() {
 }
 
 bool ClipboardWatcher::isDownloadableUrl(const QUrl &url) const {
+    if (!DownloadManager::instance().clipboardMonitoringEnabled()) return false;
+
     QString path = url.path().toLower();
     QString ext = QFileInfo(path).suffix();
 
@@ -42,13 +57,7 @@ bool ClipboardWatcher::isDownloadableUrl(const QUrl &url) const {
         }
     }
 
-    // Popüler video platformları
-    QString host = url.host().toLower();
-    if (host.contains("youtube.com") || host.contains("youtu.be") ||
-        host.contains("vimeo.com") || host.contains("dailymotion.com") ||
-        host.contains("tiktok.com") || host.contains("instagram.com") ||
-        host.contains("facebook.com") || host.contains("fb.watch") || host.contains("fb.com") ||
-        host.contains("twitter.com") || host.contains("x.com")) {
+    if (MediaHosts::isStreamingSite(url.host())) {
         return true;
     }
 

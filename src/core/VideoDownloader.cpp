@@ -70,6 +70,27 @@ bool VideoDownloader::isAvailable() {
     return !findYtDlp().isEmpty();
 }
 
+QString VideoDownloader::ytDlpVersion() {
+    static QString s_cachedVersion;
+    static bool s_checked = false;
+    if (s_checked) return s_cachedVersion;
+    s_checked = true;
+
+    QString exe = findYtDlp();
+    if (exe.isEmpty()) return QString();
+
+    QProcess proc;
+    proc.start(exe, QStringList() << "--version");
+    if (proc.waitForFinished(2000)) {
+        s_cachedVersion = QString::fromUtf8(proc.readAllStandardOutput()).trimmed();
+    }
+    return s_cachedVersion;
+}
+
+bool VideoDownloader::isFfmpegAvailable() {
+    return !findFfmpeg().isEmpty();
+}
+
 QString VideoDownloader::createCookieFile() {
     if (m_item.m_cookies.isEmpty()) return QString();
 
@@ -165,10 +186,14 @@ void VideoDownloader::start() {
     QString ffmpegPath = findFfmpeg();
     if (!ffmpegPath.isEmpty()) {
         args << "--ffmpeg-location" << QFileInfo(ffmpegPath).absolutePath();
+    } else {
+        qWarning("ffmpeg bulunamadı! Video ve ses birleştirme işlemleri başarısız olabilir.");
     }
 
     QString nodePath = findNode();
-    if (!nodePath.isEmpty()) {
+    QString ver = ytDlpVersion();
+    // --js-runtimes is only supported in modern yt-dlp (2024+)
+    if (!nodePath.isEmpty() && (ver.isEmpty() || ver >= "2024")) {
         args << "--js-runtimes" << QString("node:%1").arg(nodePath);
     }
 

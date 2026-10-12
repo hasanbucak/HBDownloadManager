@@ -30,6 +30,11 @@ DownloadDetailDialog::DownloadDetailDialog(const QString &downloadId, QWidget *p
 
     connect(&DownloadManager::instance(), SIGNAL(atItemUpdated(DownloadItem)),
             this, SLOT(onItemUpdated(DownloadItem)));
+    connect(&DownloadManager::instance(), &DownloadManager::atItemRemoved, this, [this](const QString &id) {
+        if (id == m_downloadId) {
+            reject();
+        }
+    });
     connect(m_pauseResumeBtn, SIGNAL(clicked()), this, SLOT(onPauseResumeClicked()));
     connect(m_cancelBtn, SIGNAL(clicked()), this, SLOT(onCancelClicked()));
 }
@@ -46,6 +51,7 @@ void DownloadDetailDialog::setupUi() {
     // Üst Bilgiler
     QGroupBox *infoGroup = new QGroupBox(tr("Dosya Bilgileri"), this);
     QFormLayout *formLayout = new QFormLayout(infoGroup);
+    m_stateLabel->setWordWrap(true);
     formLayout->addRow(tr("Dosya:"), m_fileNameLabel);
     formLayout->addRow(tr("Bağlantı:"), m_urlLabel);
     formLayout->addRow(tr("Durum:"), m_stateLabel);
@@ -115,7 +121,11 @@ void DownloadDetailDialog::updateUiWithItem(const DownloadItem &item) {
 
     m_fileNameLabel->setText(item.m_fileName);
     m_urlLabel->setText(item.m_url.toString());
-    m_stateLabel->setText(item.stateString());
+    if (item.m_state == DownloadStateError && !item.m_errorMessage.isEmpty()) {
+        m_stateLabel->setText(QString("%1: %2").arg(item.stateString(), item.m_errorMessage));
+    } else {
+        m_stateLabel->setText(item.stateString());
+    }
     m_sizeLabel->setText(item.formattedSize());
     m_speedLabel->setText(tr("Hız: %1").arg(item.formattedSpeed()));
     m_etaLabel->setText(tr("Kalan Süre: %1").arg(item.formattedEta()));
@@ -126,7 +136,7 @@ void DownloadDetailDialog::updateUiWithItem(const DownloadItem &item) {
     if (item.isActive()) {
         m_pauseResumeBtn->setText(tr("Duraklat"));
         m_pauseResumeBtn->setEnabled(true);
-    } else if (item.m_state == DownloadStatePaused) {
+    } else if (item.m_state == DownloadStatePaused || item.m_state == DownloadStateError) {
         m_pauseResumeBtn->setText(tr("Devam Et"));
         m_pauseResumeBtn->setEnabled(true);
     } else {
@@ -151,6 +161,10 @@ void DownloadDetailDialog::updateUiWithItem(const DownloadItem &item) {
             m_segmentBars.append(pb);
         }
 
+        while (m_segmentBars.size() > segCount) {
+            delete m_segmentBars.takeLast();
+        }
+
         m_segmentsTable->setRowCount(segCount);
         for (int i = 0; i < segCount; ++i) {
             const SegmentInfo &seg = item.m_segments.at(i);
@@ -172,7 +186,7 @@ void DownloadDetailDialog::onPauseResumeClicked() {
 
     if (item->isActive()) {
         DownloadManager::instance().pauseDownload(m_downloadId);
-    } else if (item->m_state == DownloadStatePaused) {
+    } else if (item->m_state == DownloadStatePaused || item->m_state == DownloadStateError) {
         DownloadManager::instance().resumeDownload(m_downloadId);
     }
 }

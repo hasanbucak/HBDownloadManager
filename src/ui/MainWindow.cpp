@@ -182,7 +182,29 @@ void MainWindow::applyDarkTheme() {
         "QPushButton { background-color: #0e639c; color: #ffffff; border: none; border-radius: 4px; padding: 6px 14px; font-weight: bold; }"
         "QPushButton:hover { background-color: #1177bb; }"
         "QPushButton:pressed { background-color: #094771; }"
+        "QGroupBox { color: #ffffff; border: 1px solid #3c3c3c; border-radius: 4px; margin-top: 10px; padding-top: 10px; font-weight: bold; }"
+        "QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 4px; color: #cccccc; }"
+        "QRadioButton { color: #ffffff; spacing: 6px; }"
+        "QRadioButton::indicator { width: 14px; height: 14px; }"
+        "QCheckBox { color: #ffffff; spacing: 6px; }"
+        "QCheckBox::indicator { width: 14px; height: 14px; }"
     );
+}
+
+bool MainWindow::matchesFilter(const DownloadItem &it) const {
+    switch (m_selectedCategory) {
+    case 0: return true; // Tümü
+    case 1: return it.isActive(); // Devam Edenler
+    case 2: return (it.m_state == DownloadStatePaused); // Duraklatılanlar
+    case 3: return (it.m_state == DownloadStateCompleted); // Tamamlananlar
+    case 4: return (it.category() == FileCategoryImage);
+    case 5: return (it.category() == FileCategoryMusic);
+    case 6: return (it.category() == FileCategoryVideo);
+    case 7: return (it.category() == FileCategoryPrograms);
+    case 8: return (it.category() == FileCategoryDocument);
+    case 9: return (it.category() == FileCategoryCompressed);
+    default: return true;
+    }
 }
 
 void MainWindow::onCategorySelected(int row) {
@@ -191,31 +213,23 @@ void MainWindow::onCategorySelected(int row) {
 }
 
 void MainWindow::refreshTable() {
+    QString selId = selectedDownloadId();
     m_downloadTable->setRowCount(0);
     const QList<DownloadItem> &items = DownloadManager::instance().items();
 
     for (int i = 0; i < items.size(); ++i) {
         const DownloadItem &it = items.at(i);
-        bool match = false;
-
-        switch (m_selectedCategory) {
-        case 0: match = true; break; // Tümü
-        case 1: match = it.isActive(); break; // Devam Edenler
-        case 2: match = (it.m_state == DownloadStatePaused); break; // Duraklatılanlar
-        case 3: match = (it.m_state == DownloadStateCompleted); break; // Tamamlananlar
-        case 4: match = (it.category() == FileCategoryImage); break;
-        case 5: match = (it.category() == FileCategoryMusic); break;
-        case 6: match = (it.category() == FileCategoryVideo); break;
-        case 7: match = (it.category() == FileCategoryPrograms); break;
-        case 8: match = (it.category() == FileCategoryDocument); break;
-        case 9: match = (it.category() == FileCategoryCompressed); break;
-        default: match = true; break;
-        }
-
-        if (match) {
+        if (matchesFilter(it)) {
             int row = m_downloadTable->rowCount();
             m_downloadTable->insertRow(row);
             updateTableRow(row, it);
+        }
+    }
+
+    if (!selId.isEmpty()) {
+        int selRow = findRowById(selId);
+        if (selRow >= 0) {
+            m_downloadTable->selectRow(selRow);
         }
     }
 }
@@ -241,7 +255,13 @@ void MainWindow::updateTableRow(int row, const DownloadItem &item) {
 
     m_downloadTable->setItem(row, 3, new QTableWidgetItem(item.formattedSpeed()));
     m_downloadTable->setItem(row, 4, new QTableWidgetItem(item.formattedEta()));
-    m_downloadTable->setItem(row, 5, new QTableWidgetItem(item.stateString()));
+
+    QTableWidgetItem *stateItem = new QTableWidgetItem(item.stateString());
+    if (item.m_state == DownloadStateError && !item.m_errorMessage.isEmpty()) {
+        stateItem->setToolTip(item.m_errorMessage);
+    }
+    m_downloadTable->setItem(row, 5, stateItem);
+
     QString dateStr = item.m_createdAt.isValid()
         ? item.m_createdAt.toString("dd.MM.yyyy hh:mm")
         : QDateTime::currentDateTime().toString("dd.MM.yyyy hh:mm");
@@ -447,6 +467,7 @@ void MainWindow::onTableContextMenu(const QPoint &pos) {
 
     QAction *actCopyUrl = menu.addAction(tr("Bağlantıyı Kopyala"));
     connect(actCopyUrl, &QAction::triggered, [urlText]() {
+        ClipboardWatcher::ignoreUrl(urlText);
         QApplication::clipboard()->setText(urlText);
     });
 
@@ -489,14 +510,29 @@ void MainWindow::onTableContextMenu(const QPoint &pos) {
 }
 
 void MainWindow::onItemAdded(const DownloadItem &item) {
-    Q_UNUSED(item);
-    refreshTable();
+    if (matchesFilter(item)) {
+        int row = m_downloadTable->rowCount();
+        m_downloadTable->insertRow(row);
+        updateTableRow(row, item);
+    }
 }
 
 void MainWindow::onItemUpdated(const DownloadItem &item) {
     int row = findRowById(item.m_id);
+    bool match = matchesFilter(item);
+
     if (row >= 0) {
-        updateTableRow(row, item);
+        if (!match) {
+            m_downloadTable->removeRow(row);
+        } else {
+            updateTableRow(row, item);
+        }
+    } else {
+        if (match) {
+            int newRow = m_downloadTable->rowCount();
+            m_downloadTable->insertRow(newRow);
+            updateTableRow(newRow, item);
+        }
     }
 
     // Status bar güncelle
@@ -527,10 +563,15 @@ void MainWindow::onItemRemoved(const QString &id) {
 }
 
 void MainWindow::onUrlDetected(const QUrl &url) {
+    static bool s_dialogOpen = false;
+    if (s_dialogOpen) return;
+    s_dialogOpen = true;
+
     NewDownloadDialog dlg(url, this);
     if (dlg.exec() == QDialog::Accepted) {
         DownloadManager::instance().addDownload(dlg.downloadItem(), dlg.shouldStartImmediately());
     }
+    s_dialogOpen = false;
 }
 
 void MainWindow::onQuitTriggered() {
@@ -551,7 +592,9 @@ void MainWindow::onQuitTriggered() {
 
 void MainWindow::closeEvent(QCloseEvent *event) {
     if (qApp->isSavingSession()) {
+        DownloadManager::instance().pauseAll();
         event->accept();
+        qApp->quit();
         return;
     }
 

@@ -12,6 +12,7 @@ public:
 
     bool isEnabled() const { return m_enabled; }
     void setEnabled(bool enabled) { m_enabled = enabled; }
+    static void ignoreUrl(const QString &url);
 
 signals:
     void atUrlDetected(const QUrl &url);

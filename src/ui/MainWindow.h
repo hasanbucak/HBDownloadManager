@@ -51,6 +51,7 @@ private:
 
     void refreshTable();
     void updateTableRow(int row, const DownloadItem &item);
+    bool matchesFilter(const DownloadItem &item) const;
     QString selectedDownloadId() const;
     int findRowById(const QString &id) const;
 
