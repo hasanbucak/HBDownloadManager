@@ -8,10 +8,12 @@ LIBS += -L$$PWD/lib -lGL
 
 HEADERS += src/core/SegmentInfo.h \
            src/core/DownloadItem.h \
+           src/core/RangePlanner.h \
            src/core/SegmentedDownloader.h \
            src/core/VideoDownloader.h \
            src/core/DownloadManager.h \
            src/server/LocalServer.h \
+           src/utils/PathUtils.h \
            src/utils/ClipboardWatcher.h \
            src/ui/NewDownloadDialog.h \
            src/ui/DownloadDetailDialog.h \
@@ -20,10 +22,12 @@ HEADERS += src/core/SegmentInfo.h \
 
 SOURCES += src/main.cpp \
            src/core/DownloadItem.cpp \
+           src/core/RangePlanner.cpp \
            src/core/SegmentedDownloader.cpp \
            src/core/VideoDownloader.cpp \
            src/core/DownloadManager.cpp \
            src/server/LocalServer.cpp \
+           src/utils/PathUtils.cpp \
            src/utils/ClipboardWatcher.cpp \
            src/ui/NewDownloadDialog.cpp \
            src/ui/DownloadDetailDialog.cpp \

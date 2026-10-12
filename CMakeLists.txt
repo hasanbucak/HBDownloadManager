@@ -8,16 +8,26 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(Qt6 COMPONENTS Core Gui Widgets Network REQUIRED)
+include(GNUInstallDirs)
+
+find_package(Qt6 COMPONENTS Core Gui Widgets Network QUIET)
+if (NOT Qt6_FOUND)
+    find_package(Qt5 COMPONENTS Core Gui Widgets Network REQUIRED)
+    set(QT_VERSION_MAJOR 5)
+else()
+    set(QT_VERSION_MAJOR 6)
+endif()
 
 # Ana GUI Uygulaması
 set(SOURCES
     src/main.cpp
     src/core/DownloadItem.cpp
+    src/core/RangePlanner.cpp
     src/core/SegmentedDownloader.cpp
     src/core/VideoDownloader.cpp
     src/core/DownloadManager.cpp
     src/server/LocalServer.cpp
+    src/utils/PathUtils.cpp
     src/utils/ClipboardWatcher.cpp
     src/ui/NewDownloadDialog.cpp
     src/ui/DownloadDetailDialog.cpp
@@ -28,10 +38,10 @@ set(SOURCES
 
 add_executable(hb-download-manager ${SOURCES})
 target_link_libraries(hb-download-manager PRIVATE
-    Qt6::Core
-    Qt6::Gui
-    Qt6::Widgets
-    Qt6::Network
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Gui
+    Qt${QT_VERSION_MAJOR}::Widgets
+    Qt${QT_VERSION_MAJOR}::Network
 )
 
 target_include_directories(hb-download-manager PRIVATE
@@ -45,5 +55,19 @@ target_include_directories(hb-download-manager PRIVATE
 # Tarayıcı Native Messaging Host İkilisi
 add_executable(hbdm-native-host src/native_host/native_host_main.cpp)
 target_link_libraries(hbdm-native-host PRIVATE
-    Qt6::Core
+    Qt${QT_VERSION_MAJOR}::Core
+)
+
+# Kurulum Kuralları (Install rules)
+install(TARGETS hb-download-manager hbdm-native-host
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
+install(FILES hb-download-manager.desktop
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
+)
+
+install(FILES resources/app_icon.png
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/128x128/apps
+    RENAME hb-download-manager.png
 )

@@ -112,6 +112,8 @@ void VideoDownloader::start() {
     m_videoTotalBytes = 0;
     m_audioTotalBytes = 0;
     m_isAudioPhase = false;
+    m_recentOutputLines.clear();
+    m_finalPath.clear();
 
     QString qual = m_item.m_quality.trimmed().toLower();
     int heightNum = 0;
@@ -133,7 +135,8 @@ void VideoDownloader::start() {
     QString outputTemplate = QDir(m_item.m_directory).filePath("%(title)s" + qualityTag + ".%(ext)s");
 
     QStringList args;
-    args << "--newline"
+    args << "--ignore-config"
+         << "--newline"
          << "--progress"
          << "--no-playlist"
          << "--continue"
@@ -141,6 +144,7 @@ void VideoDownloader::start() {
          << "--windows-filenames"
          << "--no-mtime"
          << "--print" << "TITLE:%(title)s"
+         << "--print" << "after_move:filepath"
          << "--progress-template"
          << "download:HBDM_PROG:%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress._speed_str)s|%(progress._eta_str)s|%(progress._percent_str)s|%(progress.filename)s"
          << "--no-simulate";
@@ -182,7 +186,7 @@ void VideoDownloader::start() {
         args << "--referer" << m_item.m_headers.value("Referer");
     }
 
-    args << m_item.m_url.toString();
+    args << "--" << m_item.m_url.toString();
 
     m_process->setProcessChannelMode(QProcess::MergedChannels);
     m_process->start(ytdlp, args);
@@ -239,6 +243,15 @@ static qint64 parseSizeStringToBytes(const QString &sizeStr) {
 }
 
 void VideoDownloader::parseOutputLine(const QString &line) {
+    bool isProgress = line.startsWith("HBDM_PROG:") ||
+                      (line.startsWith("[download]") && (line.contains('%') || line.contains("ETA")));
+    if (!isProgress) {
+        m_recentOutputLines.append(line);
+        while (m_recentOutputLines.size() > 20) {
+            m_recentOutputLines.removeFirst();
+        }
+    }
+
     if (line.startsWith("TITLE:")) {
         QString rawTitle = line.mid(6).trimmed();
         if (!rawTitle.isEmpty()) {
@@ -406,12 +419,40 @@ void VideoDownloader::parseOutputLine(const QString &line) {
         return;
     }
 
+    // Capture exact final output file path from yt-dlp --print "after_move:filepath"
+    if (!line.startsWith('[') && !line.startsWith("HBDM_") && !line.startsWith("TITLE:") &&
+        !line.startsWith("ERROR") && !line.startsWith("WARNING") && !line.startsWith("Deleting original")) {
+        if (QFileInfo(line).isAbsolute() && (QFile::exists(line) || (!m_item.m_directory.isEmpty() && line.startsWith(m_item.m_directory)))) {
+            m_finalPath = line;
+            m_item.m_fileName = QFileInfo(m_finalPath).fileName();
+            emit atTitleDetected(m_item.m_fileName);
+            return;
+        }
+    }
+
     if (line.contains("[download] 100%")) {
         emit atProgressUpdated(100.0, m_item.m_totalBytes, m_item.m_totalBytes, "", "", tr("Tamamlanıyor..."));
     }
 }
 
 void VideoDownloader::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus) {
+    while (m_process->canReadLine()) {
+        QString line = QString::fromUtf8(m_process->readLine()).trimmed();
+        if (!line.isEmpty()) {
+            parseOutputLine(line);
+        }
+    }
+    QByteArray remaining = m_process->readAll();
+    if (!remaining.isEmpty()) {
+        QStringList remLines = QString::fromUtf8(remaining).split('\n');
+        for (int i = 0; i < remLines.size(); ++i) {
+            QString rLine = remLines.at(i).trimmed();
+            if (!rLine.isEmpty()) {
+                parseOutputLine(rLine);
+            }
+        }
+    }
+
     if (m_paused) {
         return;
     }
@@ -430,21 +471,31 @@ void VideoDownloader::onProcessFinished(int exitCode, QProcess::ExitStatus exitS
             m_item.m_totalBytes = fi.size();
             m_item.m_receivedBytes = fi.size();
             m_item.m_fileName = fi.fileName();
+            emit atFinished(true, m_finalPath, QString());
         } else {
-            QDir dir(m_item.m_directory);
-            QStringList filters;
-            filters << "*.mp4" << "*.mkv" << "*.webm" << "*.mp3" << "*.m4a";
-            QFileInfoList list = dir.entryInfoList(filters, QDir::Files, QDir::Time);
-            if (!list.isEmpty() && list.first().lastModified().secsTo(QDateTime::currentDateTime()) < 120) {
-                m_finalPath = list.first().absoluteFilePath();
-                m_item.m_fileName = list.first().fileName();
-                m_item.m_totalBytes = list.first().size();
-                m_item.m_receivedBytes = list.first().size();
+            emit atFinished(false, QString(), tr("İndirilen dosya bulunamadı: %1").arg(m_finalPath));
+        }
+    } else {
+        QString err;
+        for (int i = m_recentOutputLines.size() - 1; i >= 0; --i) {
+            const QString &l = m_recentOutputLines.at(i);
+            if (l.startsWith("ERROR:", Qt::CaseInsensitive)) {
+                err = l;
+                break;
             }
         }
-        emit atFinished(true, m_finalPath, QString());
-    } else {
-        QString err = QString::fromUtf8(m_process->readAllStandardError()).trimmed();
+        if (err.isEmpty() && !m_recentOutputLines.isEmpty()) {
+            for (int i = m_recentOutputLines.size() - 1; i >= 0; --i) {
+                const QString &l = m_recentOutputLines.at(i);
+                if (l.contains("ERROR", Qt::CaseInsensitive)) {
+                    err = l;
+                    break;
+                }
+            }
+            if (err.isEmpty()) {
+                err = m_recentOutputLines.last();
+            }
+        }
         if (err.isEmpty()) {
             err = tr("yt-dlp işlemi hata kodu %1 ile sonlandı").arg(exitCode);
         }

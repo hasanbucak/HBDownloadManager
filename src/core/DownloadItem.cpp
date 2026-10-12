@@ -1,8 +1,10 @@
 #include "DownloadItem.h"
+#include "PathUtils.h"
 #include <QFileInfo>
 #include <QDir>
 #include <QStandardPaths>
 #include <QStringList>
+#include <QRegularExpression>
 
 DownloadItem::DownloadItem()
     : m_id(QUuid::createUuid().toString(QUuid::WithoutBraces)),
@@ -42,10 +44,7 @@ DownloadItem::DownloadItem(const QUrl &url, const QString &dir)
         m_directory = dir;
     }
 
-    m_fileName = QFileInfo(url.path()).fileName();
-    if (m_fileName.isEmpty()) {
-        m_fileName = "download";
-    }
+    m_fileName = PathUtils::sanitizeFileName(QFileInfo(url.path()).fileName());
 }
 
 bool DownloadItem::isActive() const {
@@ -122,8 +121,13 @@ QString DownloadItem::partFilePath() const {
 }
 
 QString DownloadItem::targetFilePath() const {
-    if (!m_finalPath.isEmpty()) return m_finalPath;
-    return QDir(m_directory).filePath(m_fileName);
+    if (!m_finalPath.isEmpty()) {
+        QString safe = PathUtils::safeJoin(m_directory, QFileInfo(m_finalPath).fileName());
+        if (!safe.isEmpty() && m_finalPath == safe) {
+            return m_finalPath;
+        }
+    }
+    return PathUtils::safeJoin(m_directory, m_fileName);
 }
 
 FileCategory DownloadItem::category() const {
@@ -232,7 +236,7 @@ DownloadItem DownloadItem::fromJson(const QJsonObject &obj) {
     DownloadItem item;
     item.m_id = obj["id"].toString();
     item.m_url = QUrl(obj["url"].toString());
-    item.m_fileName = obj["fileName"].toString();
+    item.m_fileName = PathUtils::sanitizeFileName(obj["fileName"].toString());
     item.m_directory = obj["directory"].toString();
     QString kindStr = obj["kind"].toString();
     if (kindStr == "audio") item.m_kind = DownloadKindAudio;
@@ -261,6 +265,12 @@ DownloadItem DownloadItem::fromJson(const QJsonObject &obj) {
         item.m_completedAt = QDateTime::fromString(obj["completedAt"].toString(), Qt::ISODate);
     }
     item.m_finalPath = obj["finalPath"].toString();
+    if (!item.m_finalPath.isEmpty()) {
+        QString safe = PathUtils::safeJoin(item.m_directory, QFileInfo(item.m_finalPath).fileName());
+        if (safe.isEmpty() || item.m_finalPath != safe) {
+            item.m_finalPath.clear();
+        }
+    }
     item.m_requestedSegments = obj["requestedSegments"].toInt(8);
     item.m_cookieHeader = obj["cookieHeader"].toString();
     item.m_cookies = obj["cookies"].toArray();

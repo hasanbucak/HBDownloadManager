@@ -8,6 +8,7 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QStatusBar>
+#include <QMenuBar>
 #include <QMenu>
 #include <QMessageBox>
 #include <QDesktopServices>
@@ -17,6 +18,8 @@
 #include <QInputDialog>
 #include <QProcess>
 #include <QApplication>
+#include <QSystemTrayIcon>
+#include <QClipboard>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent),
@@ -27,6 +30,7 @@ MainWindow::MainWindow(QWidget *parent)
       m_actRemove(NULL),
       m_actClearCompleted(NULL),
       m_actSettings(NULL),
+      m_actQuit(NULL),
       m_categoryList(new QListWidget(this)),
       m_downloadTable(new QTableWidget(this)),
       m_statusSpeedLabel(new QLabel(this)),
@@ -48,10 +52,21 @@ MainWindow::MainWindow(QWidget *parent)
 MainWindow::~MainWindow() {
 }
 
+void MainWindow::setServerStatus(bool listening, quint16 port, const QString &errorMsg) {
+    if (listening) {
+        m_statusServerLabel->setText(tr("Köprü: 127.0.0.1:%1 (Aktif)").arg(port));
+        m_statusServerLabel->setStyleSheet("");
+    } else {
+        m_statusServerLabel->setText(tr("Köprü Hatası: %1").arg(errorMsg.isEmpty() ? tr("Başlatılamadı") : errorMsg));
+        m_statusServerLabel->setStyleSheet("color: #ff6b6b;");
+    }
+}
+
 void MainWindow::setupUi() {
     setWindowTitle(tr("HB Download Manager (Linux)"));
     resize(960, 580);
 
+    setupMenuBar();
     setupToolBar();
     setupSidebar();
     setupTable();
@@ -64,6 +79,13 @@ void MainWindow::setupUi() {
     splitter->setStretchFactor(1, 4);
 
     setCentralWidget(splitter);
+}
+
+void MainWindow::setupMenuBar() {
+    QMenu *fileMenu = menuBar()->addMenu(tr("&Dosya"));
+    fileMenu->addAction(tr("&Yeni İndirme..."), this, SLOT(onNewDownloadClicked()), QKeySequence::New);
+    fileMenu->addSeparator();
+    m_actQuit = fileMenu->addAction(tr("&Çıkış"), this, SLOT(onQuitTriggered()), QKeySequence(Qt::CTRL | Qt::Key_Q));
 }
 
 void MainWindow::setupToolBar() {
@@ -135,6 +157,13 @@ void MainWindow::setupStatusBar() {
 void MainWindow::applyDarkTheme() {
     setStyleSheet(
         "QMainWindow { background-color: #1e1e1e; color: #ffffff; }"
+        "QMenuBar { background-color: #252526; color: #cccccc; border-bottom: 1px solid #3c3c3c; }"
+        "QMenuBar::item { background-color: transparent; padding: 4px 8px; }"
+        "QMenuBar::item:selected { background-color: #094771; color: #ffffff; }"
+        "QMenu { background-color: #252526; color: #ffffff; border: 1px solid #3c3c3c; }"
+        "QMenu::item { padding: 6px 20px; }"
+        "QMenu::item:selected { background-color: #094771; }"
+        "QMenu::separator { height: 1px; background: #3c3c3c; margin: 4px 0; }"
         "QToolBar { background-color: #252526; border-bottom: 1px solid #3c3c3c; padding: 4px; spacing: 6px; }"
         "QToolButton { background-color: #333333; color: #ffffff; border: 1px solid #444444; border-radius: 4px; padding: 6px 12px; font-weight: bold; }"
         "QToolButton:hover { background-color: #444444; }"
@@ -261,15 +290,23 @@ void MainWindow::onRemoveClicked() {
     QString id = selectedDownloadId();
     if (id.isEmpty()) return;
 
-    QMessageBox::StandardButton reply = QMessageBox::question(
-        this, tr("İndirmeyi Sil"),
-        tr("Seçili indirmeyi listeden kaldırmak istiyor musunuz?\n\n(Evet: Dosyayı da sil, Hayır: Sadece listeden kaldır)"),
-        QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel
-    );
+    QMessageBox msgBox(this);
+    msgBox.setWindowTitle(tr("İndirmeyi Kaldır"));
+    msgBox.setText(tr("Seçili indirme listeden kaldırılsın mı?"));
+    msgBox.setInformativeText(tr("Dosyayı sabit diskinizden de tamamen silmek istiyor musunuz?"));
+    msgBox.setIcon(QMessageBox::Question);
 
-    if (reply == QMessageBox::Yes) {
+    QPushButton *btnRemoveOnly = msgBox.addButton(tr("Listeden Kaldır"), QMessageBox::ActionRole);
+    QPushButton *btnDeleteFile = msgBox.addButton(tr("Dosyayı da Sil"), QMessageBox::DestructiveRole);
+    QPushButton *btnCancel = msgBox.addButton(tr("İptal"), QMessageBox::RejectRole);
+    Q_UNUSED(btnCancel);
+
+    msgBox.setDefaultButton(btnRemoveOnly);
+    msgBox.exec();
+
+    if (msgBox.clickedButton() == btnDeleteFile) {
         DownloadManager::instance().removeDownload(id, true);
-    } else if (reply == QMessageBox::No) {
+    } else if (msgBox.clickedButton() == btnRemoveOnly) {
         DownloadManager::instance().removeDownload(id, false);
     }
 }
@@ -354,11 +391,17 @@ void MainWindow::onTableContextMenu(const QPoint &pos) {
     DownloadItem *item = DownloadManager::instance().findItem(id);
     if (item == NULL) return;
 
+    const QString filePath = item->targetFilePath();
+    const QString dirPath = item->m_directory;
+    const QString urlText = item->m_url.toString();
+    const bool isActive = item->isActive();
+    const DownloadState state = item->m_state;
+
     QMenu menu(this);
-    if (item->isActive()) {
+    if (isActive) {
         QAction *actPause = menu.addAction(tr("Duraklat"));
         connect(actPause, &QAction::triggered, [id]() { DownloadManager::instance().pauseDownload(id); });
-    } else if (item->m_state == DownloadStatePaused) {
+    } else if (state == DownloadStatePaused) {
         QAction *actResume = menu.addAction(tr("Devam Et"));
         connect(actResume, &QAction::triggered, [id]() { DownloadManager::instance().resumeDownload(id); });
     }
@@ -372,21 +415,21 @@ void MainWindow::onTableContextMenu(const QPoint &pos) {
 
     menu.addSeparator();
 
-    if (item->m_state == DownloadStateCompleted) {
+    if (state == DownloadStateCompleted) {
         QAction *actOpen = menu.addAction(tr("Dosyayı Aç"));
-        connect(actOpen, &QAction::triggered, [item]() {
-            QDesktopServices::openUrl(QUrl::fromLocalFile(item->targetFilePath()));
+        connect(actOpen, &QAction::triggered, [filePath]() {
+            QDesktopServices::openUrl(QUrl::fromLocalFile(filePath));
         });
     }
 
     QAction *actShowFolder = menu.addAction(tr("Klasörde Göster"));
-    connect(actShowFolder, &QAction::triggered, [item]() {
-        QDesktopServices::openUrl(QUrl::fromLocalFile(item->m_directory));
+    connect(actShowFolder, &QAction::triggered, [dirPath]() {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(dirPath));
     });
 
     QAction *actCopyUrl = menu.addAction(tr("Bağlantıyı Kopyala"));
-    connect(actCopyUrl, &QAction::triggered, [item]() {
-        QApplication::clipboard()->setText(item->m_url.toString());
+    connect(actCopyUrl, &QAction::triggered, [urlText]() {
+        QApplication::clipboard()->setText(urlText);
     });
 
     menu.addSeparator();
@@ -394,7 +437,17 @@ void MainWindow::onTableContextMenu(const QPoint &pos) {
     connect(actRemove, &QAction::triggered, [id]() { DownloadManager::instance().removeDownload(id, false); });
 
     QAction *actDelete = menu.addAction(tr("Dosyayı ve Listeden Sil"));
-    connect(actDelete, &QAction::triggered, [id]() { DownloadManager::instance().removeDownload(id, true); });
+    connect(actDelete, &QAction::triggered, [this, id]() {
+        QMessageBox::StandardButton reply = QMessageBox::warning(
+            this, tr("Dosyayı Sil"),
+            tr("Bu indirmeyi listeden kaldırmak ve indirilen dosyayı sabit diskten tamamen silmek istediğinizden emin misiniz?"),
+            QMessageBox::Yes | QMessageBox::Cancel,
+            QMessageBox::Cancel
+        );
+        if (reply == QMessageBox::Yes) {
+            DownloadManager::instance().removeDownload(id, true);
+        }
+    });
 
     menu.exec(m_downloadTable->viewport()->mapToGlobal(pos));
 }
@@ -444,8 +497,48 @@ void MainWindow::onUrlDetected(const QUrl &url) {
     }
 }
 
+void MainWindow::onQuitTriggered() {
+    if (DownloadManager::instance().activeCount() > 0) {
+        int ret = QMessageBox::question(
+            this, tr("Çıkış Onayı"),
+            tr("Aktif indirmeler devam ediyor. Uygulamadan çıkmak istediğinizden emin misiniz?"),
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No
+        );
+        if (ret != QMessageBox::Yes) {
+            return;
+        }
+    }
+    DownloadManager::instance().pauseAll();
+    QApplication::quit();
+}
+
 void MainWindow::closeEvent(QCloseEvent *event) {
-    // Kapatıldığında arka planda (tray'de) yaşamaya devam etsin
-    hide();
-    event->ignore();
+    if (qApp->isSavingSession()) {
+        event->accept();
+        return;
+    }
+
+    if (QSystemTrayIcon::isSystemTrayAvailable()) {
+        // Sistem tepsisi varsa pencereyi gizle, arka planda çalışmaya devam et
+        hide();
+        event->ignore();
+    } else {
+        // Sistem tepsisi yoksa kapatma uygulamadan çıkış anlamına gelir
+        if (DownloadManager::instance().activeCount() > 0) {
+            int ret = QMessageBox::question(
+                this, tr("Çıkış Onayı"),
+                tr("Aktif indirmeler devam ediyor. Uygulamadan çıkmak istediğinizden emin misiniz?"),
+                QMessageBox::Yes | QMessageBox::No,
+                QMessageBox::No
+            );
+            if (ret != QMessageBox::Yes) {
+                event->ignore();
+                return;
+            }
+        }
+        DownloadManager::instance().pauseAll();
+        event->accept();
+        QApplication::quit();
+    }
 }

@@ -7,8 +7,10 @@
 #include <QJsonArray>
 #include <QProcess>
 #include <QTextStream>
+#include <QRandomGenerator>
 #include <iostream>
 #include <unistd.h>
+#include <sys/stat.h>
 
 static bool installNativeHostManifests(const QString &hostBinaryPath) {
     QJsonObject chromeManifest;
@@ -141,6 +143,48 @@ int main(int argc, char *argv[]) {
             resp["ok"] = launchMainApplication();
         } else if (action == "ping") {
             resp["ok"] = true;
+        } else if (action == "getToken") {
+            QString configDir = QDir::homePath() + "/.config/hb-download-manager";
+            QString tokenPath = configDir + "/bridge-token";
+            QFile tokenFile(tokenPath);
+            QString token;
+            if (tokenFile.exists() && tokenFile.open(QIODevice::ReadOnly)) {
+                token = QString::fromUtf8(tokenFile.readAll()).trimmed();
+                tokenFile.close();
+            }
+
+            if (token.isEmpty()) {
+                QDir().mkpath(configDir);
+                QByteArray bytes(32, 0);
+                QFile urandom("/dev/urandom");
+                if (urandom.open(QIODevice::ReadOnly)) {
+                    bytes = urandom.read(32);
+                    urandom.close();
+                }
+                if (bytes.size() != 32 || bytes == QByteArray(32, 0)) {
+                    QRandomGenerator *gen = QRandomGenerator::system();
+                    quint32 words[8];
+                    for (int i = 0; i < 8; ++i) {
+                        words[i] = gen->generate();
+                    }
+                    bytes = QByteArray(reinterpret_cast<const char*>(words), 32);
+                }
+                token = QString::fromLatin1(bytes.toHex());
+                if (tokenFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                    tokenFile.write(token.toUtf8());
+                    tokenFile.close();
+                    tokenFile.setPermissions(QFile::ReadOwner | QFile::WriteOwner);
+                    ::chmod(tokenPath.toLocal8Bit().constData(), S_IRUSR | S_IWUSR);
+                }
+            }
+
+            if (!token.isEmpty()) {
+                resp["ok"] = true;
+                resp["token"] = token;
+            } else {
+                resp["ok"] = false;
+                resp["error"] = "failed to get bridge token";
+            }
         } else {
             resp["ok"] = false;
             resp["error"] = "unknown action";

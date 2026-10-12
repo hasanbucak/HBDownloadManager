@@ -6,7 +6,7 @@
   "browser_specific_settings": {
     "gecko": {
       "id": "hbdm@hasanbucak.com",
-      "strict_min_version": "109.0"
+      "strict_min_version": "128.0"
     }
   },
   "icons": {
@@ -30,7 +30,10 @@
     "http://localhost/*"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "scripts": [
+      "background.js"
+    ]
   },
   "action": {
     "default_popup": "popup.html",

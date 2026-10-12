@@ -1,4 +1,5 @@
 #include "NewDownloadDialog.h"
+#include "PathUtils.h"
 #include "../core/DownloadManager.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -105,7 +106,7 @@ DownloadItem NewDownloadDialog::downloadItem() const {
 
     QString name = m_fileNameEdit->text().trimmed();
     if (!name.isEmpty()) {
-        item.m_fileName = name;
+        item.m_fileName = PathUtils::sanitizeFileName(name);
     }
     item.m_kind = (m_videoRadio->isChecked() ? DownloadKindVideo : DownloadKindFile);
     item.m_requestedSegments = m_segmentsCombo->currentData().toInt();

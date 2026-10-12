@@ -1,14 +1,21 @@
 #include "LocalServer.h"
+#include "PathUtils.h"
 #include "../core/DownloadManager.h"
 #include <QHostAddress>
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QDebug>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QRandomGenerator>
+#include <sys/stat.h>
 
 LocalServer::LocalServer(quint16 port, QObject *parent)
     : QObject(parent),
       m_server(new QTcpServer(this)),
       m_port(port) {
+    ensureToken();
     connect(m_server, SIGNAL(newConnection()), this, SLOT(onNewConnection()));
 }
 
@@ -18,6 +25,9 @@ LocalServer::~LocalServer() {
 
 bool LocalServer::start() {
     stop();
+    if (m_token.isEmpty()) {
+        ensureToken();
+    }
     return m_server->listen(QHostAddress::LocalHost, m_port);
 }
 
@@ -25,6 +35,12 @@ void LocalServer::stop() {
     if (m_server->isListening()) {
         m_server->close();
     }
+    for (QMap<QTcpSocket*, QTimer*>::iterator it = m_clientTimers.begin(); it != m_clientTimers.end(); ++it) {
+        it.value()->stop();
+        it.value()->deleteLater();
+    }
+    m_clientTimers.clear();
+
     for (QMap<QTcpSocket*, QByteArray>::iterator it = m_clientBuffers.begin(); it != m_clientBuffers.end(); ++it) {
         it.key()->disconnectFromHost();
         it.key()->deleteLater();
@@ -40,21 +56,125 @@ quint16 LocalServer::serverPort() const {
     return m_port;
 }
 
+QString LocalServer::errorString() const {
+    return m_server != NULL ? m_server->errorString() : QString();
+}
+
+QString LocalServer::token() const {
+    return m_token;
+}
+
+void LocalServer::ensureToken() {
+    QString configDir = QDir::homePath() + "/.config/hb-download-manager";
+    QDir().mkpath(configDir);
+    QString tokenPath = configDir + "/bridge-token";
+
+    QFile file(tokenPath);
+    if (file.exists() && file.open(QIODevice::ReadOnly)) {
+        m_token = QString::fromUtf8(file.readAll()).trimmed();
+        file.close();
+    }
+
+    if (m_token.isEmpty()) {
+        QByteArray bytes(32, 0);
+        QFile urandom("/dev/urandom");
+        if (urandom.open(QIODevice::ReadOnly)) {
+            bytes = urandom.read(32);
+            urandom.close();
+        }
+        if (bytes.size() != 32 || bytes == QByteArray(32, 0)) {
+            QRandomGenerator *gen = QRandomGenerator::system();
+            quint32 words[8];
+            for (int i = 0; i < 8; ++i) {
+                words[i] = gen->generate();
+            }
+            bytes = QByteArray(reinterpret_cast<const char*>(words), 32);
+        }
+        m_token = QString::fromLatin1(bytes.toHex());
+
+        if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            file.write(m_token.toUtf8());
+            file.close();
+        }
+    }
+
+    file.setPermissions(QFile::ReadOwner | QFile::WriteOwner);
+    ::chmod(tokenPath.toLocal8Bit().constData(), S_IRUSR | S_IWUSR);
+}
+
+bool LocalServer::isHostAllowed(const QString &rawHost) const {
+    QString host = rawHost.trimmed().toLower();
+    if (host.isEmpty()) {
+        return false;
+    }
+
+    quint16 p = (m_server && m_server->isListening()) ? m_server->serverPort() : m_port;
+    if (host == QString("127.0.0.1:%1").arg(p) || host == QString("localhost:%1").arg(p)) {
+        return true;
+    }
+    if (m_port != 0 && (host == QString("127.0.0.1:%1").arg(m_port) || host == QString("localhost:%1").arg(m_port))) {
+        return true;
+    }
+    return false;
+}
+
+static bool constantTimeCompare(const QString &a, const QString &b) {
+    if (a.isEmpty() || b.isEmpty() || a.size() != b.size()) {
+        return false;
+    }
+    const QByteArray baA = a.toUtf8();
+    const QByteArray baB = b.toUtf8();
+    if (baA.size() != baB.size()) {
+        return false;
+    }
+    int diff = 0;
+    for (int i = 0; i < baA.size(); ++i) {
+        diff |= (baA.at(i) ^ baB.at(i));
+    }
+    return (diff == 0);
+}
+
 void LocalServer::onNewConnection() {
     while (m_server->hasPendingConnections()) {
         QTcpSocket *socket = m_server->nextPendingConnection();
         if (socket != NULL) {
             m_clientBuffers[socket] = QByteArray();
+
+            QTimer *timer = new QTimer(this);
+            timer->setSingleShot(true);
+            timer->setInterval(10000);
+            connect(timer, SIGNAL(timeout()), this, SLOT(onClientTimeout()));
+            m_clientTimers[socket] = timer;
+            timer->start();
+
             connect(socket, SIGNAL(readyRead()), this, SLOT(onClientReadyRead()));
             connect(socket, SIGNAL(disconnected()), this, SLOT(onClientDisconnected()));
         }
     }
 }
 
+void LocalServer::onClientTimeout() {
+    QTimer *timer = qobject_cast<QTimer*>(sender());
+    if (timer == NULL) return;
+    QTcpSocket *socket = m_clientTimers.key(timer, NULL);
+    if (socket != NULL) {
+        m_clientTimers.remove(socket);
+        m_clientBuffers.remove(socket);
+        socket->disconnectFromHost();
+        socket->deleteLater();
+    }
+    timer->deleteLater();
+}
+
 void LocalServer::onClientDisconnected() {
     QTcpSocket *socket = qobject_cast<QTcpSocket*>(sender());
     if (socket != NULL) {
         m_clientBuffers.remove(socket);
+        if (m_clientTimers.contains(socket)) {
+            QTimer *timer = m_clientTimers.take(socket);
+            timer->stop();
+            timer->deleteLater();
+        }
         socket->deleteLater();
     }
 }
@@ -63,20 +183,37 @@ void LocalServer::onClientReadyRead() {
     QTcpSocket *socket = qobject_cast<QTcpSocket*>(sender());
     if (socket == NULL) return;
 
+    if (m_clientTimers.contains(socket)) {
+        m_clientTimers[socket]->start(10000);
+    }
+
     m_clientBuffers[socket].append(socket->readAll());
     const QByteArray &buf = m_clientBuffers[socket];
 
     HttpRequest req;
-    if (parseHttpRequest(buf, req)) {
+    ParseResult res = parseHttpRequest(buf, req);
+    if (res == ParseSuccess) {
         m_clientBuffers.remove(socket);
         handleRequest(socket, req);
-    } else if (buf.size() > 16 * 1024 * 1024) {
-        // Bellek taşmasını engelle
-        socket->disconnectFromHost();
+    } else if (res == ParsePayloadTooLarge) {
+        m_clientBuffers.remove(socket);
+        QJsonObject errObj;
+        errObj["ok"] = false;
+        errObj["error"] = "payload too large";
+        sendResponse(socket, 413, errObj, req.m_headers.value("origin"));
+    } else if (buf.size() > 1024 * 1024 + 16384) {
+        m_clientBuffers.remove(socket);
+        QJsonObject errObj;
+        errObj["ok"] = false;
+        errObj["error"] = "payload too large";
+        sendResponse(socket, 413, errObj);
     }
 }
 
 bool LocalServer::isOriginAllowed(const QString &origin, const QMap<QString, QString> &headers) {
+    if (origin.isEmpty()) {
+        return true;
+    }
     if (origin.startsWith("chrome-extension://") ||
         origin.startsWith("moz-extension://") ||
         origin.startsWith("safari-web-extension://")) {
@@ -89,18 +226,23 @@ bool LocalServer::isOriginAllowed(const QString &origin, const QMap<QString, QSt
     return false;
 }
 
-bool LocalServer::parseHttpRequest(const QByteArray &data, HttpRequest &req) {
+LocalServer::ParseResult LocalServer::parseHttpRequest(const QByteArray &data, HttpRequest &req) {
     int headerEnd = data.indexOf("\r\n\r\n");
-    if (headerEnd == -1) return false;
+    if (headerEnd == -1) {
+        if (data.size() > 1024 * 1024) {
+            return ParsePayloadTooLarge;
+        }
+        return ParseIncomplete;
+    }
 
     QByteArray headBytes = data.left(headerEnd);
     QString headStr = QString::fromUtf8(headBytes);
     QStringList lines = headStr.split("\r\n");
-    if (lines.isEmpty()) return false;
+    if (lines.isEmpty()) return ParseIncomplete;
 
     QString requestLine = lines.takeFirst();
     QStringList reqParts = requestLine.split(' ');
-    if (reqParts.size() < 2) return false;
+    if (reqParts.size() < 2) return ParseIncomplete;
 
     req.m_method = reqParts.at(0).toUpper();
     req.m_path = reqParts.at(1);
@@ -115,17 +257,33 @@ bool LocalServer::parseHttpRequest(const QByteArray &data, HttpRequest &req) {
         }
     }
 
-    int contentLength = req.m_headers.value("content-length", "0").toInt();
-    int bodyStart = headerEnd + 4;
-    if (data.size() - bodyStart < contentLength) {
-        return false; // Henüz gövde tamamlanmadı
+    qint64 contentLength = req.m_headers.value("content-length", "0").toLongLong();
+    if (contentLength > 1024 * 1024) {
+        return ParsePayloadTooLarge;
     }
 
-    req.m_body = data.mid(bodyStart, contentLength);
-    return true;
+    int bodyStart = headerEnd + 4;
+    if (data.size() - bodyStart < contentLength) {
+        return ParseIncomplete;
+    }
+
+    req.m_body = data.mid(bodyStart, static_cast<int>(contentLength));
+    if (req.m_body.size() > 1024 * 1024) {
+        return ParsePayloadTooLarge;
+    }
+
+    return ParseSuccess;
 }
 
 void LocalServer::handleRequest(QTcpSocket *socket, const HttpRequest &req) {
+    if (!isHostAllowed(req.m_headers.value("host"))) {
+        QJsonObject errObj;
+        errObj["ok"] = false;
+        errObj["error"] = "invalid host";
+        sendResponse(socket, 403, errObj, req.m_headers.value("origin"));
+        return;
+    }
+
     QString origin = req.m_headers.value("origin");
     if (!isOriginAllowed(origin, req.m_headers)) {
         QJsonObject errObj;
@@ -143,6 +301,17 @@ void LocalServer::handleRequest(QTcpSocket *socket, const HttpRequest &req) {
     }
 
     QString pathOnly = req.m_path.split('?').first();
+
+    if (!(req.m_method == "GET" && pathOnly == "/ping")) {
+        QString clientToken = req.m_headers.value("x-hbdm-token");
+        if (m_token.isEmpty() || clientToken.isEmpty() || !constantTimeCompare(clientToken, m_token)) {
+            QJsonObject errObj;
+            errObj["ok"] = false;
+            errObj["error"] = "forbidden";
+            sendResponse(socket, 403, errObj, origin);
+            return;
+        }
+    }
 
     if (req.m_method == "GET" && pathOnly == "/ping") {
         QJsonObject pingObj;
@@ -221,7 +390,7 @@ void LocalServer::handleRequest(QTcpSocket *socket, const HttpRequest &req) {
 
         DownloadItem item(url);
         if (obj.contains("filename") && !obj["filename"].toString().isEmpty()) {
-            item.m_fileName = obj["filename"].toString();
+            item.m_fileName = PathUtils::sanitizeFileName(obj["filename"].toString());
         }
         item.m_cookieHeader = obj["cookieHeader"].toString();
         item.m_cookies = obj["cookies"].toArray();
@@ -317,7 +486,15 @@ void LocalServer::handleRequest(QTcpSocket *socket, const HttpRequest &req) {
 
 void LocalServer::sendResponse(QTcpSocket *socket, int statusCode, const QJsonObject &jsonBody, const QString &origin) {
     QByteArray body = QJsonDocument(jsonBody).toJson(QJsonDocument::Compact);
-    QString statusText = (statusCode == 200 ? "OK" : (statusCode == 403 ? "Forbidden" : (statusCode == 404 ? "Not Found" : "Error")));
+    QString statusText;
+    switch (statusCode) {
+    case 200: statusText = "OK"; break;
+    case 400: statusText = "Bad Request"; break;
+    case 403: statusText = "Forbidden"; break;
+    case 404: statusText = "Not Found"; break;
+    case 413: statusText = "Payload Too Large"; break;
+    default:  statusText = "Error"; break;
+    }
 
     QByteArray response;
     response.append(QString("HTTP/1.1 %1 %2\r\n").arg(statusCode).arg(statusText).toUtf8());
@@ -329,7 +506,7 @@ void LocalServer::sendResponse(QTcpSocket *socket, int statusCode, const QJsonOb
     if (!origin.isEmpty() && isOriginAllowed(origin, QMap<QString, QString>())) {
         response.append(QString("Access-Control-Allow-Origin: %1\r\n").arg(origin).toUtf8());
         response.append("Vary: Origin\r\n");
-        response.append("Access-Control-Allow-Headers: Content-Type, X-HBDM-Extension, X-HBDM-Extension-Id\r\n");
+        response.append("Access-Control-Allow-Headers: Content-Type, X-HBDM-Extension, X-HBDM-Extension-Id, X-HBDM-Token\r\n");
         response.append("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n");
         response.append("Access-Control-Allow-Private-Network: true\r\n");
         response.append("Access-Control-Allow-Local-Network: true\r\n");

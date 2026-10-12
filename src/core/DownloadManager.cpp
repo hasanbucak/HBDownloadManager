@@ -1,10 +1,14 @@
 #include "DownloadManager.h"
 #include <QDir>
 #include <QFile>
+#include <QSaveFile>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QStandardPaths>
+#include <QDateTime>
+#include <QTimer>
+#include <QCoreApplication>
 #include <QDebug>
 
 DownloadManager& DownloadManager::instance() {
@@ -14,6 +18,8 @@ DownloadManager& DownloadManager::instance() {
 
 DownloadManager::DownloadManager(QObject *parent)
     : QObject(parent),
+      m_saveTimer(NULL),
+      m_isShuttingDown(false),
       m_maxConcurrent(3),
       m_defaultSegments(8),
       m_serverPort(48213),
@@ -24,11 +30,25 @@ DownloadManager::DownloadManager(QObject *parent)
                         << "apk" << "bin" << "mp4" << "mkv" << "avi" << "mov" << "webm"
                         << "mp3" << "wav" << "flac" << "aac" << "m4a" << "pdf" << "doc" << "docx";
 
+    m_saveTimer = new QTimer(this);
+    m_saveTimer->setInterval(5000);
+    connect(m_saveTimer, SIGNAL(timeout()), this, SLOT(onPeriodicSaveTimeout()));
+
+    if (QCoreApplication::instance()) {
+        connect(QCoreApplication::instance(), SIGNAL(aboutToQuit()), this, SLOT(shutdown()));
+        connect(QCoreApplication::instance(), SIGNAL(aboutToQuit()), this, SLOT(saveState()));
+    }
+
     loadState();
+    initialize();
 }
 
 DownloadManager::~DownloadManager() {
-    saveState();
+    shutdown();
+}
+
+void DownloadManager::initialize() {
+    processQueue();
 }
 
 int DownloadManager::activeCount() const {
@@ -95,26 +115,46 @@ QString DownloadManager::addDownload(const DownloadItem &item, bool startImmedia
     return copy.m_id;
 }
 
-void DownloadManager::pauseDownload(const QString &id) {
+void DownloadManager::stopDownloader(const QString &id, bool immediateDelete) {
     if (m_activeSegmented.contains(id)) {
         SegmentedDownloader *downloader = m_activeSegmented.take(id);
         downloader->disconnect(this);
         downloader->pause();
-        downloader->deleteLater();
+        if (immediateDelete) {
+            delete downloader;
+        } else {
+            downloader->deleteLater();
+        }
     }
     if (m_activeVideo.contains(id)) {
         VideoDownloader *downloader = m_activeVideo.take(id);
         downloader->disconnect(this);
         downloader->pause();
-        downloader->deleteLater();
+        if (immediateDelete) {
+            delete downloader;
+        } else {
+            downloader->deleteLater();
+        }
     }
+}
+
+void DownloadManager::pauseDownload(const QString &id) {
+    stopDownloader(id);
 
     DownloadItem *item = findItem(id);
     if (item != NULL) {
-        item->m_state = DownloadStatePaused;
-        item->m_speed = 0.0;
-        emit atItemUpdated(*item);
-        saveState();
+        if (item->m_state == DownloadStateQueued ||
+            item->m_state == DownloadStateConnecting ||
+            item->m_state == DownloadStateDownloading) {
+            item->m_state = DownloadStatePaused;
+            item->m_speed = 0.0;
+            emit atItemUpdated(*item);
+            saveState();
+        }
+    }
+
+    if (activeCount() == 0 && m_saveTimer && m_saveTimer->isActive()) {
+        m_saveTimer->stop();
     }
 
     processQueue();
@@ -130,37 +170,131 @@ void DownloadManager::resumeDownload(const QString &id) {
     }
 }
 
+void DownloadManager::pauseAll(bool immediateDelete) {
+    for (int i = 0; i < m_items.size(); ++i) {
+        if (m_items[i].m_state == DownloadStateQueued) {
+            m_items[i].m_state = DownloadStatePaused;
+            m_items[i].m_speed = 0.0;
+            emit atItemUpdated(m_items[i]);
+        }
+    }
+
+    QList<QString> segKeys = m_activeSegmented.keys();
+    for (int i = 0; i < segKeys.size(); ++i) {
+        const QString &id = segKeys.at(i);
+        stopDownloader(id, immediateDelete);
+        DownloadItem *item = findItem(id);
+        if (item != NULL) {
+            item->m_state = DownloadStatePaused;
+            item->m_speed = 0.0;
+            emit atItemUpdated(*item);
+        }
+    }
+
+    QList<QString> vidKeys = m_activeVideo.keys();
+    for (int i = 0; i < vidKeys.size(); ++i) {
+        const QString &id = vidKeys.at(i);
+        stopDownloader(id, immediateDelete);
+        DownloadItem *item = findItem(id);
+        if (item != NULL) {
+            item->m_state = DownloadStatePaused;
+            item->m_speed = 0.0;
+            emit atItemUpdated(*item);
+        }
+    }
+
+    if (m_saveTimer && m_saveTimer->isActive()) {
+        m_saveTimer->stop();
+    }
+
+    saveState();
+}
+
+void DownloadManager::shutdown() {
+    if (m_isShuttingDown) return;
+    m_isShuttingDown = true;
+
+    if (m_saveTimer && m_saveTimer->isActive()) {
+        m_saveTimer->stop();
+    }
+
+    pauseAll(true);
+    saveState();
+
+    for (QMap<QString, SegmentedDownloader*>::iterator it = m_activeSegmented.begin(); it != m_activeSegmented.end(); ++it) {
+        SegmentedDownloader *dl = it.value();
+        if (dl != NULL) {
+            dl->disconnect(this);
+            dl->pause();
+            delete dl;
+        }
+    }
+    m_activeSegmented.clear();
+
+    for (QMap<QString, VideoDownloader*>::iterator it = m_activeVideo.begin(); it != m_activeVideo.end(); ++it) {
+        VideoDownloader *dl = it.value();
+        if (dl != NULL) {
+            dl->disconnect(this);
+            dl->pause();
+            delete dl;
+        }
+    }
+    m_activeVideo.clear();
+}
+
 void DownloadManager::cancelDownload(const QString &id) {
-    pauseDownload(id);
+    stopDownloader(id);
     DownloadItem *item = findItem(id);
     if (item != NULL) {
         item->m_state = DownloadStateCancelled;
+        item->m_speed = 0.0;
+        item->m_cookies = QJsonArray();
+        item->m_cookieHeader.clear();
         emit atItemUpdated(*item);
         saveState();
     }
+    if (activeCount() == 0 && m_saveTimer && m_saveTimer->isActive()) {
+        m_saveTimer->stop();
+    }
+    processQueue();
 }
 
 void DownloadManager::removeDownload(const QString &id, bool deleteFile) {
-    pauseDownload(id);
+    DownloadItem *found = findItem(id);
+    if (found == NULL) return;
+
+    // F7: Read item state BEFORE stopping downloader (do not turn Completed into Paused)
+    const bool wasCompleted = (found->m_state == DownloadStateCompleted);
+    const QString finalPath = found->m_finalPath;
+    const QString partPath = found->partFilePath();
+
+    stopDownloader(id);
 
     for (int i = 0; i < m_items.size(); ++i) {
         if (m_items.at(i).m_id == id) {
-            DownloadItem item = m_items.at(i);
             m_items.removeAt(i);
-
-            if (deleteFile) {
-                if (QFile::exists(item.partFilePath())) {
-                    QFile::remove(item.partFilePath());
-                }
-                if (QFile::exists(item.targetFilePath())) {
-                    QFile::remove(item.targetFilePath());
-                }
-            }
-
-            emit atItemRemoved(id);
-            saveState();
             break;
         }
+    }
+
+    // Always remove part file (the .part always belongs to us)
+    if (QFile::exists(partPath)) {
+        QFile::remove(partPath);
+    }
+
+    // If deleteFile is true, ONLY remove finalPath if Completed and !finalPath.isEmpty()
+    // Never delete targetFilePath() of an incomplete download!
+    if (deleteFile && wasCompleted && !finalPath.isEmpty()) {
+        if (QFile::exists(finalPath)) {
+            QFile::remove(finalPath);
+        }
+    }
+
+    emit atItemRemoved(id);
+    saveState();
+
+    if (activeCount() == 0 && m_saveTimer && m_saveTimer->isActive()) {
+        m_saveTimer->stop();
     }
 
     processQueue();
@@ -210,6 +344,10 @@ void DownloadManager::startItem(DownloadItem *item) {
 
         downloader->start();
     }
+
+    if (m_saveTimer && !m_saveTimer->isActive()) {
+        m_saveTimer->start(5000);
+    }
 }
 
 void DownloadManager::onSegmentedProbed(const ProbeResult &res) {
@@ -233,11 +371,7 @@ void DownloadManager::onSegmentedProgressUpdated(qint64 received, qint64 total, 
         it->m_state = DownloadStateDownloading;
         it->m_receivedBytes = received;
         it->m_totalBytes = total;
-        if (it->m_speed <= 0.0) {
-            it->m_speed = speed;
-        } else {
-            it->m_speed = 0.35 * speed + 0.65 * it->m_speed;
-        }
+        it->m_speed = speed;
         it->m_segments = segs;
         emit atItemUpdated(*it);
     }
@@ -255,6 +389,10 @@ void DownloadManager::onSegmentedFinished(bool success, const QString &errMsg) {
     DownloadItem *it = findItem(id);
     if (it != NULL) {
         *it = updated;
+        // S4: Clear sensitive session cookies upon completion or permanent failure
+        it->m_cookies = QJsonArray();
+        it->m_cookieHeader.clear();
+
         if (success) {
             emit atItemUpdated(*it);
             emit atItemCompleted(*it);
@@ -263,6 +401,11 @@ void DownloadManager::onSegmentedFinished(bool success, const QString &errMsg) {
             emit atItemFailed(*it, errMsg);
         }
     }
+
+    if (activeCount() == 0 && m_saveTimer && m_saveTimer->isActive()) {
+        m_saveTimer->stop();
+    }
+
     saveState();
     processQueue();
 }
@@ -337,6 +480,10 @@ void DownloadManager::onVideoFinished(bool success, const QString &finalPath, co
 
     DownloadItem *it = findItem(id);
     if (it != NULL) {
+        // S4: Clear sensitive session cookies upon completion or permanent failure
+        it->m_cookies = QJsonArray();
+        it->m_cookieHeader.clear();
+
         if (success) {
             it->m_state = DownloadStateCompleted;
             it->m_finalPath = (finalPath.isEmpty() ? updated.m_finalPath : finalPath);
@@ -365,8 +512,23 @@ void DownloadManager::onVideoFinished(bool success, const QString &finalPath, co
             emit atItemFailed(*it, errMsg);
         }
     }
+
+    if (activeCount() == 0 && m_saveTimer && m_saveTimer->isActive()) {
+        m_saveTimer->stop();
+    }
+
     saveState();
     processQueue();
+}
+
+void DownloadManager::onPeriodicSaveTimeout() {
+    if (activeCount() > 0) {
+        saveState();
+    } else {
+        if (m_saveTimer && m_saveTimer->isActive()) {
+            m_saveTimer->stop();
+        }
+    }
 }
 
 QString DownloadManager::configFilePath() const {
@@ -382,21 +544,43 @@ void DownloadManager::saveState() {
     }
 
     QJsonDocument doc(array);
-    QFile file(configFilePath());
-    if (file.open(QIODevice::WriteOnly)) {
-        file.write(doc.toJson());
-        file.close();
+    QString filePath = configFilePath();
+    QSaveFile saveFile(filePath);
+    if (saveFile.open(QIODevice::WriteOnly)) {
+        saveFile.write(doc.toJson());
+        if (saveFile.commit()) {
+            QFile::setPermissions(filePath, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+        } else {
+            qWarning() << "Failed to commit state file:" << filePath;
+        }
+    } else {
+        qWarning() << "Failed to open QSaveFile for writing:" << filePath << saveFile.errorString();
     }
 }
 
 void DownloadManager::loadState() {
-    QFile file(configFilePath());
+    QString path = configFilePath();
+    QFile file(path);
+    if (!file.exists()) return;
     if (!file.open(QIODevice::ReadOnly)) return;
 
-    QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+    QByteArray data = file.readAll();
     file.close();
 
-    if (!doc.isArray()) return;
+    if (data.trimmed().isEmpty()) return;
+
+    QJsonParseError parseError;
+    QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isArray()) {
+        qWarning() << "Failed to parse state file:" << parseError.errorString();
+        QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd-hhmmss");
+        QString corruptPath = QString("%1.corrupt-%2").arg(path, timestamp);
+        if (QFile::exists(corruptPath)) {
+            corruptPath = QString("%1.corrupt-%2").arg(path, QString::number(QDateTime::currentMSecsSinceEpoch()));
+        }
+        QFile::rename(path, corruptPath);
+        return;
+    }
 
     m_items.clear();
     QJsonArray array = doc.array();

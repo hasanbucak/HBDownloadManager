@@ -36,6 +36,7 @@
   // ---------- 1. Click Interception ----------
   let passThrough = null;
   document.addEventListener('click', (e) => {
+    if (!e.isTrusted) return;
     // YouTube ve video akış sayfalarında link tıklamalarını kesinlikle engelleme
     if (/youtube\.com|youtu\.be/i.test(location.hostname)) return;
 
@@ -53,7 +54,9 @@
     if (list.length ? !(ext && list.includes(ext)) : !(a.hasAttribute('download') || DL_EXT.test(href))) return;
     e.preventDefault();
     e.stopPropagation();
-    send({ type: 'download', url: href, filename: a.getAttribute('download') || '', referer: location.href, kind: 'file' }).then((r) => {
+    const downloadAttr = a.getAttribute('download');
+    const filename = downloadAttr || (a.textContent ? a.textContent.trim().slice(0, 100) : '');
+    send({ type: 'download', url: href, filename, referer: location.href, kind: 'file' }).then((r) => {
       if (r && r.ok) { if (!state.online) refresh(); return; }
       passThrough = a;
       a.click();
@@ -372,7 +375,46 @@
     return (isM4a ? 10000000 : 0) + bitrate;
   }
 
-  function buildQualityMenuItems(ytData) {
+  function createMenuItem(opts) {
+    const item = document.createElement('div');
+    item.className = 'hbdm-item';
+    if (opts.action) item.setAttribute('data-action', opts.action);
+    if (opts.quality) item.setAttribute('data-quality', opts.quality);
+    if (opts.estimatedBytes !== undefined && opts.estimatedBytes !== null) {
+      item.setAttribute('data-estimated-bytes', String(opts.estimatedBytes));
+    }
+
+    const left = document.createElement('div');
+    left.className = 'hbdm-item-left';
+
+    const iconSpan = document.createElement('span');
+    iconSpan.textContent = opts.icon || '';
+
+    const labelSpan = document.createElement('span');
+    labelSpan.textContent = opts.label || '';
+
+    left.appendChild(iconSpan);
+    left.appendChild(labelSpan);
+    item.appendChild(left);
+
+    if (opts.badge) {
+      const badgeSpan = document.createElement('span');
+      badgeSpan.className = 'hbdm-item-badge';
+      badgeSpan.textContent = opts.badge;
+      item.appendChild(badgeSpan);
+    }
+    return item;
+  }
+
+  function createMenuDivider() {
+    const div = document.createElement('div');
+    div.className = 'hbdm-divider';
+    return div;
+  }
+
+  function populateQualityMenu(menu, ytData) {
+    while (menu.firstChild) menu.removeChild(menu.firstChild);
+
     if (ytData && Array.isArray(ytData.adaptiveFormats) && ytData.adaptiveFormats.length > 0) {
       const formats = ytData.adaptiveFormats;
 
@@ -407,23 +449,21 @@
 
       const heights = Object.keys(videoFormatsByHeight).map(Number).sort((a, b) => b - a);
 
-      let html = '';
       if (heights.length > 0) {
         const maxHeight = heights[0];
         const maxMeta = getQualityMeta(maxHeight);
         const maxTotal = (videoFormatsByHeight[maxHeight].bytes || 0) + bestAudioBytes;
         const maxSizeStr = formatBytes(maxTotal);
 
-        html += `
-          <div class="hbdm-item" data-action="download" data-quality="best" data-estimated-bytes="${maxTotal}">
-            <div class="hbdm-item-left">
-              <span>🌟</span>
-              <span>En Yüksek Kalite (${maxMeta.badge})</span>
-            </div>
-            <span class="hbdm-item-badge">${maxSizeStr ? '~' + maxSizeStr : maxMeta.badge}</span>
-          </div>
-          <div class="hbdm-divider"></div>
-        `;
+        menu.appendChild(createMenuItem({
+          action: 'download',
+          quality: 'best',
+          estimatedBytes: maxTotal,
+          icon: '🌟',
+          label: `En Yüksek Kalite (${maxMeta.badge})`,
+          badge: maxSizeStr ? '~' + maxSizeStr : maxMeta.badge
+        }));
+        menu.appendChild(createMenuDivider());
 
         heights.forEach(h => {
           const item = videoFormatsByHeight[h];
@@ -432,81 +472,41 @@
           const sizeStr = formatBytes(totalBytes);
           const badgeText = sizeStr ? `~${sizeStr}` : (item.qualityLabel || `${h}p`);
 
-          html += `
-            <div class="hbdm-item" data-action="download" data-quality="${h}" data-estimated-bytes="${totalBytes}">
-              <div class="hbdm-item-left">
-                <span>${meta.icon}</span>
-                <span>${meta.label} (${item.qualityLabel || h + 'p'})</span>
-              </div>
-              <span class="hbdm-item-badge">${badgeText}</span>
-            </div>
-          `;
+          menu.appendChild(createMenuItem({
+            action: 'download',
+            quality: String(h),
+            estimatedBytes: totalBytes,
+            icon: meta.icon,
+            label: `${meta.label} (${item.qualityLabel || h + 'p'})`,
+            badge: badgeText
+          }));
         });
       }
 
-      html += `
-        <div class="hbdm-divider"></div>
-        <div class="hbdm-item" data-action="download-audio" data-quality="audio" data-estimated-bytes="${bestAudioBytes}">
-          <div class="hbdm-item-left">
-            <span>🎵</span>
-            <span>Sadece Sesi İndir</span>
-          </div>
-          <span class="hbdm-item-badge">${bestAudioBytes ? '~' + formatBytes(bestAudioBytes) : 'MP3'}</span>
-        </div>
-        <div class="hbdm-item" data-action="copy">
-          <div class="hbdm-item-left">
-            <span>📋</span>
-            <span>Video Bağlantısını Kopyala</span>
-          </div>
-        </div>
-      `;
-      return html;
+      menu.appendChild(createMenuDivider());
+      menu.appendChild(createMenuItem({
+        action: 'download-audio',
+        quality: 'audio',
+        estimatedBytes: bestAudioBytes,
+        icon: '🎵',
+        label: 'Sadece Sesi İndir',
+        badge: bestAudioBytes ? '~' + formatBytes(bestAudioBytes) : 'MP3'
+      }));
+      menu.appendChild(createMenuItem({
+        action: 'copy',
+        icon: '📋',
+        label: 'Video Bağlantısını Kopyala'
+      }));
+      return;
     }
 
-    return `
-      <div class="hbdm-item" data-action="download" data-quality="best">
-        <div class="hbdm-item-left">
-          <span>🌟</span>
-          <span>En Yüksek Kalite</span>
-        </div>
-        <span class="hbdm-item-badge">Otomatik</span>
-      </div>
-      <div class="hbdm-item" data-action="download" data-quality="1080">
-        <div class="hbdm-item-left">
-          <span>🎬</span>
-          <span>Full HD Kalite</span>
-        </div>
-        <span class="hbdm-item-badge">1080p MP4</span>
-      </div>
-      <div class="hbdm-item" data-action="download" data-quality="720">
-        <div class="hbdm-item-left">
-          <span>📺</span>
-          <span>HD Kalite</span>
-        </div>
-        <span class="hbdm-item-badge">720p MP4</span>
-      </div>
-      <div class="hbdm-item" data-action="download" data-quality="480">
-        <div class="hbdm-item-left">
-          <span>📱</span>
-          <span>Standart Kalite</span>
-        </div>
-        <span class="hbdm-item-badge">480p MP4</span>
-      </div>
-      <div class="hbdm-divider"></div>
-      <div class="hbdm-item" data-action="download-audio" data-quality="audio">
-        <div class="hbdm-item-left">
-          <span>🎵</span>
-          <span>Sadece Sesi İndir</span>
-        </div>
-        <span class="hbdm-item-badge">MP3</span>
-      </div>
-      <div class="hbdm-item" data-action="copy">
-        <div class="hbdm-item-left">
-          <span>📋</span>
-          <span>Video Bağlantısını Kopyala</span>
-        </div>
-      </div>
-    `;
+    menu.appendChild(createMenuItem({ action: 'download', quality: 'best', icon: '🌟', label: 'En Yüksek Kalite', badge: 'Otomatik' }));
+    menu.appendChild(createMenuItem({ action: 'download', quality: '1080', icon: '🎬', label: 'Full HD Kalite', badge: '1080p MP4' }));
+    menu.appendChild(createMenuItem({ action: 'download', quality: '720', icon: '📺', label: 'HD Kalite', badge: '720p MP4' }));
+    menu.appendChild(createMenuItem({ action: 'download', quality: '480', icon: '📱', label: 'Standart Kalite', badge: '480p MP4' }));
+    menu.appendChild(createMenuDivider());
+    menu.appendChild(createMenuItem({ action: 'download-audio', quality: 'audio', icon: '🎵', label: 'Sadece Sesi İndir', badge: 'MP3' }));
+    menu.appendChild(createMenuItem({ action: 'copy', icon: '📋', label: 'Video Bağlantısını Kopyala' }));
   }
 
   function createOverlay(video, player) {
@@ -514,7 +514,7 @@
     host.className = 'hbdm-video-overlay-host';
     host.style.cssText = 'position: absolute !important; top: 14px !important; right: 14px !important; z-index: 2147483647 !important; display: inline-block !important; width: auto !important; height: auto !important; pointer-events: none !important; opacity: 0.95 !important; visibility: visible !important;';
 
-    const shadow = host.attachShadow({ mode: 'open' });
+    const shadow = host.attachShadow({ mode: 'closed' });
 
     const style = document.createElement('style');
     style.textContent = OVERLAY_CSS;
@@ -571,7 +571,7 @@
       send({
         type: 'download',
         url: url,
-        filename: document.title ? document.title.slice(0, 100) : '',
+        filename: '', // let app / yt-dlp determine the filename safely
         referer: location.href,
         kind: kind,
         quality: quality || 'best',
@@ -582,6 +582,7 @@
     function bindMenuEvents() {
       menu.querySelectorAll('.hbdm-item').forEach((item) => {
         item.addEventListener('click', (e) => {
+          if (!e.isTrusted) return;
           e.stopPropagation();
           const action = item.getAttribute('data-action');
           const quality = item.getAttribute('data-quality') || 'best';
@@ -604,7 +605,7 @@
     }
 
     function renderMenu(data) {
-      menu.innerHTML = buildQualityMenuItems(data || currentYtData);
+      populateQualityMenu(menu, data || currentYtData);
       bindMenuEvents();
     }
 
@@ -613,13 +614,15 @@
 
     // Toggle dropdown
     toggle.addEventListener('click', (e) => {
+      if (!e.isTrusted) return;
       e.stopPropagation();
       window.dispatchEvent(new CustomEvent('HBDM_REQUEST_YT_DATA'));
       const open = menu.classList.toggle('hbdm-open');
       host.classList.toggle('hbdm-menu-open', open);
     });
 
-    document.addEventListener('click', () => {
+    document.addEventListener('click', (e) => {
+      if (e && !e.isTrusted) return;
       menu.classList.remove('hbdm-open');
       host.classList.remove('hbdm-menu-open');
     });
@@ -633,6 +636,7 @@
 
     // Main button click -> Best video
     mainBtn.addEventListener('click', (e) => {
+      if (!e.isTrusted) return;
       e.stopPropagation();
       const bestItem = menu.querySelector('.hbdm-item[data-quality="best"]');
       const est = bestItem ? parseInt(bestItem.getAttribute('data-estimated-bytes') || '0', 10) : 0;
@@ -783,6 +787,7 @@
       });
 
       btn.addEventListener('click', (e) => {
+        if (!e.isTrusted) return;
         e.stopPropagation();
         e.preventDefault();
         btn.innerHTML = `
@@ -795,7 +800,7 @@
         send({
           type: 'download',
           url: tweetUrl,
-          filename: document.title ? document.title.slice(0, 100) : '',
+          filename: '',
           referer: location.href,
           kind: 'video',
           quality: 'best',

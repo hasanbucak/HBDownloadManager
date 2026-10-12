@@ -22,7 +22,7 @@ Bu doküman, **HB Download Manager** projesinin tüm mimarisini, veri akışlar�
 ```text
 +---------------------------------------------------------------------------------+
 |                                WEB TARAYICILARI                                 |
-|            (Google Chrome, Chromium, Brave, Edge, Opera, Firefox, Safari)       |
+|      (Google Chrome, Chromium, Brave, Edge, Opera, Firefox, Safari [Deneysel]) |
 |                                                                                 |
 |  [ Content Script (content.js) ]               [ Service Worker (background.js) ] |
 |  - HTML5 / YouTube / X video algılama          - chrome.downloads.onCreated dinle  |
@@ -188,8 +188,8 @@ Bu doküman, **HB Download Manager** projesinin tüm mimarisini, veri akışlar�
 
 ---
 
-### Safari Eklentisi (`safari/`)
-* Apple Safari (macOS) için Web Extension dönüşüm dosyaları, `SafariWebExtensionHandler.swift` ve Xcode proje şablonu.
+### Safari Eklentisi (`safari/` - Deneysel / Şablon)
+* Apple Safari (macOS) için deneysel Web Extension dönüşüm dosyaları, `SafariWebExtensionHandler.swift` ve Xcode proje şablonu.
 
 ---
 
@@ -215,7 +215,7 @@ X (Twitter) ve benzeri sosyal ağlar videoları parçalı HLS (`.m3u8`) akışla
 
 ---
 
-## 5. PaySol / ASIS C++ Kodlama Standartları Uyumu
+## 5. Qt/C++ Kodlama ve Mimari Standartları
 
 Projedeki tüm C++ sınıfları aşağıdaki standartlara sıkı sıkıya bağlı kalarak yazılmıştır:
 * **Değişken İsimlendirme:** Sınıf üye değişkenleri kesinlikle `m_` önekiyle başlar (örn. `m_totalBytes`, `m_process`). Statik değişkenler `s_` ile başlar.

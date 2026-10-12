@@ -50,7 +50,9 @@ void TrayManager::setupMenu() {
 }
 
 void TrayManager::show() {
-    m_trayIcon->show();
+    if (QSystemTrayIcon::isSystemTrayAvailable()) {
+        m_trayIcon->show();
+    }
 }
 
 void TrayManager::onTrayIconActivated(QSystemTrayIcon::ActivationReason reason) {
@@ -79,12 +81,7 @@ void TrayManager::onNewDownloadClicked() {
 }
 
 void TrayManager::onPauseAllClicked() {
-    const QList<DownloadItem> &list = DownloadManager::instance().items();
-    for (int i = 0; i < list.size(); ++i) {
-        if (list.at(i).isActive()) {
-            DownloadManager::instance().pauseDownload(list.at(i).m_id);
-        }
-    }
+    DownloadManager::instance().pauseAll();
 }
 
 void TrayManager::onResumeAllClicked() {
@@ -97,23 +94,28 @@ void TrayManager::onResumeAllClicked() {
 }
 
 void TrayManager::onQuitClicked() {
+    DownloadManager::instance().pauseAll();
     QApplication::quit();
 }
 
 void TrayManager::onItemCompleted(const DownloadItem &item) {
-    m_trayIcon->showMessage(
-        tr("İndirme Tamamlandı"),
-        item.m_fileName,
-        QSystemTrayIcon::Information,
-        4000
-    );
+    if (QSystemTrayIcon::isSystemTrayAvailable() && m_trayIcon->isVisible()) {
+        m_trayIcon->showMessage(
+            tr("İndirme Tamamlandı"),
+            item.m_fileName,
+            QSystemTrayIcon::Information,
+            4000
+        );
+    }
 }
 
 void TrayManager::onItemFailed(const DownloadItem &item, const QString &error) {
-    m_trayIcon->showMessage(
-        tr("İndirme Hatası"),
-        QString("%1: %2").arg(item.m_fileName, error),
-        QSystemTrayIcon::Warning,
-        5000
-    );
+    if (QSystemTrayIcon::isSystemTrayAvailable() && m_trayIcon->isVisible()) {
+        m_trayIcon->showMessage(
+            tr("İndirme Hatası"),
+            QString("%1: %2").arg(item.m_fileName, error),
+            QSystemTrayIcon::Warning,
+            5000
+        );
+    }
 }

@@ -2,7 +2,7 @@
 
 Linux ekosistemi için **C++ & Qt (Qt 6.11 / Qt 5.15)** ile sıfırdan geliştirilmiş, yüksek performanslı, çok parçalı ve yerel Linux / Ubuntu indirme yöneticisi sürümüdür.
 
-PaySol / ASIS C++ mimari ve kodlama kurallarına (`m_` üye değişkenleri, `at*` sinyalleri, `on*` slotları, açık `emit`, explicit tipler ve bellek hiyerarşisi) tam uyumlu olarak inşa edilmiştir.
+Standart Qt/C++ mimari ve kodlama kurallarına (`m_` üye değişkenleri, `at*` sinyalleri, `on*` slotları, açık `emit`, açık veri tipleri ve QObject bellek hiyerarşisi) tam uyumlu olarak inşa edilmiştir.
 
 ---
 
@@ -50,14 +50,12 @@ PaySol / ASIS C++ mimari ve kodlama kurallarına (`m_` üye değişkenleri, `at*
 
 ### Derleme Adımları
 ```bash
-cd /home/hasanbucak/.gemini/antigravity/scratch/mc-download-manager-linux
-
 # 1. Ana GUI Uygulamasını Derle
-/home/hasanbucak/Qt/6.11.1/gcc_64/bin/qmake hb-download-manager.pro
+qmake hb-download-manager.pro
 make -j$(nproc)
 
 # 2. Tarayıcı Native Host İkilisini Derle
-/home/hasanbucak/Qt/6.11.1/gcc_64/bin/qmake hbdm-native-host.pro -o Makefile.host
+qmake hbdm-native-host.pro -o Makefile.host
 make -f Makefile.host -j$(nproc)
 
 # 3. Tarayıcı Native Host Kayıtlarını Otomatik Kur (Tek Komut)
@@ -79,20 +77,23 @@ make -f Makefile.host -j$(nproc)
 1. `chrome://extensions` adresine gidin.
 2. Sağ üstteki **Geliştirici modu (Developer mode)** anahtarını açın.
 3. **Paketlenmemiş öğe yükle (Load unpacked)** butonuna tıklayın.
-4. `/home/hasanbucak/.gemini/antigravity/scratch/mc-download-manager-linux/extension` klasörünü seçin.
+4. Proje dizinindeki `extension/` klasörünü seçin.
 
 ### Opera / Opera GX:
 1. `opera://extensions` adresine gidin.
 2. Sağ üstteki **Geliştirici modu** anahtarını açın.
 3. **Paketlenmemiş öğe yükle** butonuna tıklayın.
-4. `/home/hasanbucak/.gemini/antigravity/scratch/mc-download-manager-linux/extension` klasörünü seçin.
+4. Proje dizinindeki `extension/` klasörünü seçin.
 
 ### Mozilla Firefox:
 1. `about:debugging#/runtime/this-firefox` adresine gidin.
 2. **Geçici Eklenti Yükle (Load Temporary Add-on...)** butonuna tıklayın.
 3. `extension/manifest.json` dosyasını seçin.
 
-### Apple Safari (macOS / MacBook):
+### Apple Safari (macOS - Deneysel / Şablon):
+> [!NOTE]
+> Safari desteği deneysel bir Xcode şablonudur (macOS ve Xcode gerektirir).
+
 1. Terminal'de tek komutla Safari uzantısını dönüştürün:
    ```bash
    xcrun safari-web-extension-converter extension/ --project-location ./safari-build --app-name "HB Download Manager"

@@ -43,4 +43,5 @@ private:
     qint64 m_videoTotalBytes;
     qint64 m_audioTotalBytes;
     bool m_isAudioPhase;
+    QStringList m_recentOutputLines;
 };

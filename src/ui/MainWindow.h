@@ -15,6 +15,8 @@ public:
     explicit MainWindow(QWidget *parent = NULL);
     virtual ~MainWindow();
 
+    void setServerStatus(bool listening, quint16 port, const QString &errorMsg = QString());
+
 private slots:
     void onNewDownloadClicked();
     void onPauseClicked();
@@ -22,6 +24,7 @@ private slots:
     void onRemoveClicked();
     void onClearCompletedClicked();
     void onSettingsClicked();
+    void onQuitTriggered();
     void onCategorySelected(int row);
     void onTableDoubleClicked(int row, int column);
     void onTableContextMenu(const QPoint &pos);
@@ -37,6 +40,7 @@ protected:
 
 private:
     void setupUi();
+    void setupMenuBar();
     void setupToolBar();
     void setupSidebar();
     void setupTable();
@@ -55,6 +59,7 @@ private:
     QAction *m_actRemove;
     QAction *m_actClearCompleted;
     QAction *m_actSettings;
+    QAction *m_actQuit;
 
     QListWidget *m_categoryList;
     QTableWidget *m_downloadTable;

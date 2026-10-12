@@ -8,12 +8,25 @@ const IS_FIREFOX = typeof browser !== 'undefined' && String(browser.runtime.getU
 const IS_SAFARI = !IS_FIREFOX && typeof browser !== 'undefined' && !!browser.runtime.sendNativeMessage && !chrome.downloads?.onDeterminingFilename;
 
 const DEFAULTS = { port: 48213, intercept: true, minSizeMB: 0, sniff: true, autoLaunch: true };
+const NATIVE_HOST = 'com.hasanbucak.hbdownloadmanager';
 // Native messaging host bundled with the app (Chrome/Brave/Edge/Firefox); Safari talks to its app extension.
 const BROWSER = IS_FIREFOX ? 'firefox' : IS_SAFARI ? 'safari' : (navigator.brave ? 'brave' : (/OPR\/|Opera/i.test(navigator.userAgent) ? 'opera' : (/Edg\//.test(navigator.userAgent) ? 'edge' : 'chrome')));
 
 const MEDIA_EXT = /\.(mp4|m4v|webm|mkv|mov|avi|flv|mp3|m4a|aac|ogg|opus|wav|flac)(\?|#|$)/i;
+const VIDEO_EXT = /\.(mp4|m4v|webm|mkv|mov|avi|flv)(\?|#|$)/i;
+const AUDIO_EXT = /\.(mp3|m4a|aac|ogg|opus|wav|flac)(\?|#|$)/i;
 const FRAGMENT = /\.(ts|m4s|m4f|cmfv|cmfa|fmp4|init)(\?|#|$)|[/_.-](seg|segment|chunk|frag|fragment)[-_]?\d+/i;
 const IGNORED_HOSTS = /(^|\.)googlevideo\.com$|(^|\.)fbcdn\.net$|(^|\.)twimg\.com$/i;
+
+function detectMediaKind(filename, url, mime) {
+  const m = (mime || '').toLowerCase();
+  if (m.startsWith('audio/')) return 'audio';
+  if (m.startsWith('video/')) return 'video';
+  const target = filename || url || '';
+  if (AUDIO_EXT.test(target)) return 'audio';
+  if (VIDEO_EXT.test(target)) return 'video';
+  return 'file';
+}
 
 // ---------- Settings ----------
 async function getSettings() {
@@ -25,10 +38,48 @@ async function setSettings(patch) {
   await api.storage.local.set({ settings: { ...cur, ...patch } });
 }
 const base = (s) => `http://127.0.0.1:${s.port}`;
-// Custom header = proof the request comes from an extension: ordinary web pages cannot send it
-// without a CORS preflight, and the bridge only grants CORS to extension origins. Chrome omits the
-// Origin header on extension GET requests that are covered by host permissions, so Origin alone is not enough.
-const BRIDGE_HEADERS = { 'X-HBDM-Extension': BROWSER, 'X-HBDM-Extension-Id': api.runtime.id };
+
+// ---------- Auth token (Native host handshake) ----------
+let cachedToken = null;
+
+async function requestTokenFromNativeHost() {
+  if (!api.runtime.sendNativeMessage) return null;
+  try {
+    const r = await api.runtime.sendNativeMessage(IS_SAFARI ? 'application.id' : NATIVE_HOST, { action: 'getToken' });
+    if (r && r.ok && r.token) {
+      cachedToken = r.token;
+      await api.storage.local.set({ bridgeToken: r.token, token: r.token });
+      return r.token;
+    }
+  } catch {}
+  return null;
+}
+
+async function getAuthToken() {
+  if (cachedToken) return cachedToken;
+  try {
+    const s = await api.storage.local.get(['bridgeToken', 'token']);
+    if (s?.bridgeToken || s?.token) {
+      cachedToken = s.bridgeToken || s.token;
+      return cachedToken;
+    }
+  } catch {}
+  return await requestTokenFromNativeHost();
+}
+
+// Custom headers: Extension proof + secret token
+async function getBridgeHeaders(extraHeaders = {}) {
+  const token = await getAuthToken();
+  const headers = {
+    'X-HBDM-Extension': BROWSER,
+    'X-HBDM-Extension-Id': api.runtime.id,
+    ...extraHeaders,
+  };
+  if (token) {
+    headers['X-HBDM-Token'] = token;
+  }
+  return headers;
+}
 
 // ---------- App communication ----------
 async function ping(settings) {
@@ -36,7 +87,8 @@ async function ping(settings) {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 1200);
-    const r = await fetch(base(settings) + '/ping?browser=' + BROWSER, { signal: ctrl.signal, cache: 'no-store', headers: BRIDGE_HEADERS });
+    const headers = await getBridgeHeaders();
+    const r = await fetch(base(settings) + '/ping?browser=' + BROWSER, { signal: ctrl.signal, cache: 'no-store', headers });
     clearTimeout(t);
     if (!r.ok) return null;
     const app = await r.json();
@@ -51,7 +103,8 @@ async function ping(settings) {
 // ---------- Download progress: toolbar badge + popup list ----------
 async function bridgeJSON(path, init) {
   const settings = await getSettings();
-  const r = await fetch(base(settings) + path, { cache: 'no-store', ...init, headers: { ...BRIDGE_HEADERS, ...(init?.headers || {}) } });
+  const headers = await getBridgeHeaders(init?.headers);
+  const r = await fetch(base(settings) + path, { cache: 'no-store', ...init, headers });
   return r.json();
 }
 async function getDownloads() {
@@ -139,18 +192,29 @@ async function sendToApp({ url, filename, referer, kind, quality, estimatedBytes
   const settings = await getSettings();
   const ck = await cookiesFor(url);
   const payload = {
-    url, filename: filename || '', referer: referer || '', kind: kind || 'file', quality: quality || 'best',
+    url, filename: filename || '', referer: referer || '', kind: kind || 'file',
     estimatedBytes: estimatedBytes || 0,
     userAgent: navigator.userAgent, cookieHeader: ck.header, cookies: ck.list,
   };
-  const post = () => fetch(base(settings) + '/download', {
-    method: 'POST', headers: { 'Content-Type': 'application/json', ...BRIDGE_HEADERS }, body: JSON.stringify(payload),
-  });
+  if (kind === 'video' || kind === 'audio') {
+    payload.quality = quality || 'best';
+  }
+  const post = async () => {
+    const headers = await getBridgeHeaders({ 'Content-Type': 'application/json' });
+    return fetch(base(settings) + '/download', {
+      method: 'POST', headers, body: JSON.stringify(payload),
+    });
+  };
   try {
     let r;
     try { r = await post(); } catch (e) {
       // App not running: start it and try once more.
       if (!settings.autoLaunch || !(await ensureApp(settings))) throw e;
+      await requestTokenFromNativeHost();
+      r = await post();
+    }
+    if (r.status === 403) {
+      await requestTokenFromNativeHost();
       r = await post();
     }
     const j = await r.json();
@@ -179,7 +243,7 @@ async function launchApp() {
 // Returns the app's ping answer, starting the app first when it is not running (waits up to ~12 s).
 let launching = null;
 async function ensureApp(settings) {
-  const app = await ping(settings);
+  let app = await ping(settings);
   if (app) return app;
   if (!launching) {
     launching = (async () => {
@@ -188,7 +252,10 @@ async function ensureApp(settings) {
       while (Date.now() < until) {
         await new Promise((r) => setTimeout(r, 500));
         const a = await ping(settings);
-        if (a) return a;
+        if (a) {
+          await requestTokenFromNativeHost();
+          return a;
+        }
       }
       return null;
     })();
@@ -211,7 +278,7 @@ function matchesCaptureTypes(app, filename, url) {
   return !!e && list.includes(e);
 }
 
-// ---------- Download interception (Chrome) ----------
+// ---------- Download interception (Chrome / Firefox) ----------
 async function interceptDownload(item) {
   const settings = await getSettings();
   if (!settings.intercept) return false;
@@ -228,6 +295,22 @@ async function interceptDownload(item) {
   if (!app) return false;
   if (!matchesCaptureTypes(app, item.filename || '', url)) return false;
 
+  const filename = item.filename ? item.filename.split(/[\\/]/).pop() : '';
+  const kind = detectMediaKind(filename, url, item.mime);
+  const res = await sendToApp({
+    url,
+    filename,
+    referer: item.referrer,
+    kind,
+    estimatedBytes: item.totalBytes > 0 ? item.totalBytes : 0,
+  });
+
+  // Only cancel the browser download AFTER the app responds with {ok: true}.
+  // If the app returns ok: false or is offline, let the browser download proceed!
+  if (!res || !res.ok) {
+    return false;
+  }
+
   try { await api.downloads.cancel(item.id); } catch {}
   if (IS_FIREFOX) {
     // A small file can finish before the app has answered; delete the browser's duplicate copy.
@@ -237,8 +320,6 @@ async function interceptDownload(item) {
     } catch {}
   }
   try { await api.downloads.erase({ id: item.id }); } catch {}
-  const filename = item.filename ? item.filename.split(/[\\/]/).pop() : '';
-  sendToApp({ url, filename, referer: item.referrer, kind: 'file' });
   return true;
 }
 
@@ -389,8 +470,9 @@ function createMenus() {
     if (r && typeof r.then === 'function') r.then(create, create);
   } catch { create(); }
 }
-api.runtime.onInstalled.addListener(() => { createMenus(); ping(); });
-api.runtime.onStartup?.addListener(() => { createMenus(); ping(); });
+api.runtime.onInstalled.addListener(() => { createMenus(); requestTokenFromNativeHost().then(() => ping()); });
+api.runtime.onStartup?.addListener(() => { createMenus(); requestTokenFromNativeHost().then(() => ping()); });
+requestTokenFromNativeHost();
 menus?.onClicked.addListener((info, tab) => {
   if (info.menuItemId === 'dm-link') {
     const url = info.linkUrl || info.srcUrl;
@@ -405,6 +487,7 @@ menus?.onClicked.addListener((info, tab) => {
 api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     try {
+      if (sender.id && sender.id !== api.runtime.id) return;
       switch (msg?.type) {
         case 'status': {
           const settings = await getSettings();
@@ -420,7 +503,12 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case 'downloads': sendResponse(await getDownloads()); break;
         case 'action': sendResponse(await downloadAction(msg.id, msg.action)); break;
         case 'download': sendResponse(await sendToApp(msg)); break;
-        case 'setSettings': await setSettings(msg.settings || {}); sendResponse({ ok: true }); break;
+        case 'setSettings': {
+          if (sender.tab) throw new Error('Unauthorized');
+          await setSettings(msg.settings || {});
+          sendResponse({ ok: true });
+          break;
+        }
         case 'launchApp': sendResponse({ ok: await launchApp() }); break;
         case 'pageMedia': {
           if (sender.tab) {

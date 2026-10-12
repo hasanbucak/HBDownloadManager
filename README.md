@@ -42,7 +42,7 @@
 * Bu sayede indirme hızı saniyede onlarca kez sıçramaz, tamamen stabil ve akıcı görünür.
 
 ### 5. 🌐 Çoklu Tarayıcı Entegrasyonu (WebExtension & Native Messaging)
-* **Google Chrome, Chromium, Brave, Microsoft Edge, Opera, Mozilla Firefox ve Apple Safari** ile tam uyumlu WebExtension.
+* **Google Chrome, Chromium, Brave, Microsoft Edge, Opera ve Mozilla Firefox** ile tam uyumlu WebExtension (Apple Safari deneysel / macOS şablonu).
 * `127.0.0.1:48213` üzerinde hafif yerel REST köprüsü üzerinden tarayıcı indirmelerini otomatik yakalar; oturum çerezlerini (cookies), referer ve user-agent başlıklarını uygulamaya aktarır.
 * **Native Messaging Host:** Uygulama kapalıyken tarayıcıdan indirme başlatıldığında arka planda otomatik çalıştırılır (`com.hasanbucak.hbdownloadmanager`).
 
@@ -59,7 +59,7 @@
 ```text
 +---------------------------------------------------------------+
 |                      Web Tarayıcıları                         |
-|   (Chrome / Brave / Edge / Opera / Firefox / Safari)          |
+|   (Chrome / Brave / Edge / Opera / Firefox / Safari [Deneysel])|
 |                                                               |
 |  [ Content Script (Shadow DOM) ]    [ Service Worker (MV3) ]  |
 |  - Yüzen Video İndirme Butonu       - İndirme Yakalama (API)  |
@@ -168,7 +168,10 @@ make -j$(nproc)
 2. **Geçici Eklenti Yükle (Load Temporary Add-on...)** butonuna tıklayın.
 3. `extension/manifest.json` dosyasını seçin.
 
-### Apple Safari (macOS)
+### Apple Safari (macOS - Deneysel / Şablon)
+> [!NOTE]
+> Safari desteği deneysel bir Xcode şablonudur (macOS ve Xcode gerektirir).
+
 1. Terminal üzerinden Safari uzantısını dönüştürün:
    ```bash
    xcrun safari-web-extension-converter extension/ --project-location ./safari-build --app-name "HB Download Manager"

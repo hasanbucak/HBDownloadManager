@@ -16,6 +16,17 @@ cmake_install.cmake
 # Compiled Binaries
 hb-download-manager
 hbdm-native-host
+test_pathutils
+test_rangeplanner
+test_json_roundtrip
+test_download_lifecycle
+test_range_validation
+test_bridge_auth
+target_wrapper.sh
+
+# Test Artifacts
+*.moc
+__pycache__/
 
 # Build Directories
 build/
