@@ -17,6 +17,7 @@ struct ProbeResult {
     QString m_suggestedFileName;
     QString m_contentType;
     QUrl m_finalUrl;
+    QString m_etag;
 
     ProbeResult()
         : m_totalBytes(-1), m_supportsRanges(false) {}
@@ -46,7 +47,14 @@ public:
                                            qint64 *rangeFirstOut = NULL,
                                            qint64 *rangeLastOut = NULL);
     static QString uniqueTargetPath(const QString &baseDir, const QString &fileName, const QString &id = QString());
+
+    // fdatasync the part file, then record the counters as durable (safe to persist)
     void syncToDisk();
+    // Item whose segment/byte counters never claim data that is not yet on disk
+    DownloadItem durableItem() const;
+
+    // Test hook: shorten stall/connect/probe timeouts (milliseconds); 0 keeps the default
+    static void setTimeoutsForTesting(qint64 stallMs, qint64 connectMs, qint64 probeMs);
 
 signals:
     void atProbed(const ProbeResult &result);
@@ -72,7 +80,12 @@ private:
     void startSingleStream();
     void launchSegment(int index);
     bool validateSegmentReply(QNetworkReply *reply, const SegmentInfo &seg);
-    void scheduleRetry(int segIndex, const QString &reason);
+    void scheduleRetry(int segIndex, const QString &reason, bool countAsRetry = true);
+    void abortAllReplies();
+    void resetDurable();
+    void fallBackToSingleStream();
+    void restartFromProbe(bool keepSegments);
+    bool switchToOriginalUrl();
     void checkAllSegmentsCompleted();
     void finishDownload();
     void failDownload(const QString &error);
@@ -81,7 +94,7 @@ private:
     void closePartFile();
     void applyUniqueFilename();
 
-    QNetworkRequest createRequest(const QUrl &url, const QString &rangeHeader = QString()) const;
+    QNetworkRequest createRequest(const QUrl &url, const QString &rangeHeader = QString(), bool allowIfRange = true) const;
     static QString parseContentDisposition(const QString &header);
 
     DownloadItem m_item;
@@ -118,4 +131,15 @@ private:
 
     QMap<int, int> m_segmentRetries;
     QMap<int, int> m_connectFailures;
+
+    // Bumped on pause/fail/finish/restart; deferred lambdas from an older generation do nothing
+    int m_generation;
+    bool m_triedOriginalUrl;
+    bool m_keepSegmentsOnProbe;
+    QList<SegmentInfo> m_durableSegments;
+    qint64 m_durableReceived;
+
+    static qint64 s_stallMs;
+    static qint64 s_connectMs;
+    static qint64 s_probeMs;
 };

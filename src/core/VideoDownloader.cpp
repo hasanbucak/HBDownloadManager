@@ -5,17 +5,49 @@
 #include <QFileInfo>
 #include <QRegularExpression>
 #include <QStandardPaths>
+#include <QRandomGenerator>
+#include <QCoreApplication>
+#include <csignal>
+#include <cerrno>
+#include <sys/types.h>
+#include <unistd.h>
+
+namespace {
+// yt-dlp runs in its own process group so that SIGTERM also reaches its ffmpeg children
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+class GroupProcess : public QProcess {
+public:
+    explicit GroupProcess(QObject *parent) : QProcess(parent) {}
+protected:
+    void setupChildProcess() override { ::setpgid(0, 0); }
+};
+#endif
+
+QProcess *createGroupProcess(QObject *parent) {
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+    return new GroupProcess(parent);
+#else
+    QProcess *p = new QProcess(parent);
+    p->setChildProcessModifier([]() { ::setpgid(0, 0); });
+    return p;
+#endif
+}
+
+QString s_ytDlpVersion;
+int s_ytDlpVersionState = 0;  // 0 unknown, 1 probing, 2 known
+}
 
 VideoDownloader::VideoDownloader(const DownloadItem &item, QObject *parent)
     : QObject(parent),
       m_item(item),
-      m_process(new QProcess(this)),
+      m_process(createGroupProcess(this)),
       m_tempCookieFile(NULL),
       m_cancelled(false),
       m_paused(false),
       m_videoTotalBytes(0),
       m_audioTotalBytes(0),
-      m_isAudioPhase(false) {
+      m_isAudioPhase(false),
+      m_stopRequested(false) {
     connect(m_process, SIGNAL(readyReadStandardOutput()), this, SLOT(onProcessReadyRead()));
     connect(m_process, SIGNAL(readyReadStandardError()), this, SLOT(onProcessReadyRead()));
     connect(m_process, SIGNAL(finished(int, QProcess::ExitStatus)),
@@ -70,21 +102,52 @@ bool VideoDownloader::isAvailable() {
     return !findYtDlp().isEmpty();
 }
 
-QString VideoDownloader::ytDlpVersion() {
-    static QString s_cachedVersion;
-    static bool s_checked = false;
-    if (s_checked) return s_cachedVersion;
-    s_checked = true;
+QString VideoDownloader::ytDlpVersion(bool allowBlocking) {
+    if (s_ytDlpVersionState == 2 || !allowBlocking) {
+        return s_ytDlpVersion;
+    }
 
     QString exe = findYtDlp();
-    if (exe.isEmpty()) return QString();
+    if (exe.isEmpty()) {
+        s_ytDlpVersionState = 2;
+        return QString();
+    }
 
     QProcess proc;
     proc.start(exe, QStringList() << "--version");
     if (proc.waitForFinished(2000)) {
-        s_cachedVersion = QString::fromUtf8(proc.readAllStandardOutput()).trimmed();
+        s_ytDlpVersion = QString::fromUtf8(proc.readAllStandardOutput()).trimmed();
+        s_ytDlpVersionState = 2;
     }
-    return s_cachedVersion;
+    return s_ytDlpVersion;
+}
+
+void VideoDownloader::prefetchYtDlpVersion() {
+    if (s_ytDlpVersionState != 0 || QCoreApplication::instance() == NULL) return;
+
+    const QString exe = findYtDlp();
+    if (exe.isEmpty()) {
+        s_ytDlpVersionState = 2;
+        return;
+    }
+
+    s_ytDlpVersionState = 1;
+    QProcess *proc = new QProcess(QCoreApplication::instance());
+    QObject::connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), proc,
+                     [proc](int exitCode, QProcess::ExitStatus status) {
+        if (status == QProcess::NormalExit && exitCode == 0) {
+            s_ytDlpVersion = QString::fromUtf8(proc->readAllStandardOutput()).trimmed();
+        }
+        s_ytDlpVersionState = 2;
+        proc->deleteLater();
+    });
+    QObject::connect(proc, &QProcess::errorOccurred, proc, [proc](QProcess::ProcessError err) {
+        if (err == QProcess::FailedToStart) {
+            s_ytDlpVersionState = 2;
+            proc->deleteLater();
+        }
+    });
+    proc->start(exe, QStringList() << "--version");
 }
 
 bool VideoDownloader::isFfmpegAvailable() {
@@ -136,6 +199,9 @@ void VideoDownloader::start() {
     m_isAudioPhase = false;
     m_recentOutputLines.clear();
     m_finalPath.clear();
+    m_stopRequested = false;
+    // Random per run: a crafted title printed by yt-dlp cannot imitate the result-path line
+    m_fileMarker = QStringLiteral("HBDM_FILE_%1:").arg(QRandomGenerator::global()->generate64(), 16, 16, QLatin1Char('0'));
 
     QString qual = m_item.m_quality.trimmed().toLower();
     int heightNum = 0;
@@ -166,7 +232,7 @@ void VideoDownloader::start() {
          << "--windows-filenames"
          << "--no-mtime"
          << "--print" << "TITLE:%(title)s"
-         << "--print" << "after_move:HBDM_FILE:%(filepath)s"
+         << "--print" << QStringLiteral("after_move:%1%(filepath)s").arg(m_fileMarker)
          << "--progress-template"
          << "download:HBDM_PROG:%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress._speed_str)s|%(progress._eta_str)s|%(progress._percent_str)s|%(progress.filename)s"
          << "--no-simulate";
@@ -191,9 +257,9 @@ void VideoDownloader::start() {
     }
 
     QString nodePath = findNode();
-    QString ver = ytDlpVersion();
-    // --js-runtimes is only supported in modern yt-dlp (2024+)
-    if (!nodePath.isEmpty() && (ver.isEmpty() || ver >= "2024")) {
+    const QString ver = ytDlpVersion(true);
+    // --js-runtimes needs a modern yt-dlp; versions are "YYYY.MM.DD"
+    if (!nodePath.isEmpty() && ver.left(4).toInt() >= 2024) {
         args << "--js-runtimes" << QString("node:%1").arg(nodePath);
     }
 
@@ -218,26 +284,46 @@ void VideoDownloader::start() {
     m_process->start(ytdlp, args);
 }
 
-void VideoDownloader::pause() {
-    if (m_process != NULL && m_process->state() != QProcess::NotRunning) {
-        m_paused = true;
-        m_process->terminate();
-        if (!m_process->waitForFinished(1500)) {
-            m_process->kill();
-            m_process->waitForFinished(500);
-        }
+void VideoDownloader::signalProcessGroup(int sig) {
+    if (m_process == NULL) return;
+    const qint64 pid = m_process->processId();
+    if (pid <= 0) return;
+    if (::kill(-static_cast<pid_t>(pid), sig) != 0) {
+        // No own group (setpgid failed): signal the process itself
+        ::kill(static_cast<pid_t>(pid), sig);
     }
 }
 
-void VideoDownloader::cancel() {
-    if (m_process != NULL && m_process->state() != QProcess::NotRunning) {
+void VideoDownloader::requestStop() {
+    if (m_process == NULL || m_process->state() == QProcess::NotRunning || m_stopRequested) return;
+    m_paused = true;
+    m_stopRequested = true;
+    signalProcessGroup(SIGTERM);
+}
+
+void VideoDownloader::stopProcess(bool cancelled) {
+    if (m_process == NULL || m_process->state() == QProcess::NotRunning) return;
+    if (cancelled) {
         m_cancelled = true;
-        m_process->terminate();
-        if (!m_process->waitForFinished(1500)) {
-            m_process->kill();
-            m_process->waitForFinished(500);
-        }
+    } else {
+        m_paused = true;
     }
+    if (!m_stopRequested) {
+        m_stopRequested = true;
+        signalProcessGroup(SIGTERM);
+    }
+    if (!m_process->waitForFinished(1500)) {
+        signalProcessGroup(SIGKILL);
+        m_process->waitForFinished(500);
+    }
+}
+
+void VideoDownloader::pause() {
+    stopProcess(false);
+}
+
+void VideoDownloader::cancel() {
+    stopProcess(true);
 }
 
 void VideoDownloader::onProcessReadyRead() {
@@ -305,8 +391,8 @@ void VideoDownloader::parseOutputLine(const QString &line) {
         return;
     }
 
-    if (line.startsWith("HBDM_FILE:")) {
-        QString candidate = line.mid(10).trimmed();
+    if (!m_fileMarker.isEmpty() && line.startsWith(m_fileMarker)) {
+        QString candidate = line.mid(m_fileMarker.size()).trimmed();
         QFileInfo fi(candidate);
         QString canonicalDir = QFileInfo(m_item.m_directory).canonicalFilePath();
         QString canonicalFile = fi.canonicalFilePath();
@@ -498,7 +584,9 @@ void VideoDownloader::onProcessFinished(int exitCode, QProcess::ExitStatus exitS
         if (m_finalPath.isEmpty()) {
             m_finalPath = QDir(m_item.m_directory).filePath(m_item.m_fileName);
         }
-        if (QFile::exists(m_finalPath)) {
+        if (!PathUtils::isInsideDir(m_finalPath, m_item.m_directory)) {
+            emit atFinished(false, QString(), tr("İndirilen dosya indirme klasörünün dışında: %1").arg(m_finalPath));
+        } else if (QFile::exists(m_finalPath)) {
             QFileInfo fi(m_finalPath);
             m_item.m_totalBytes = fi.size();
             m_item.m_receivedBytes = fi.size();

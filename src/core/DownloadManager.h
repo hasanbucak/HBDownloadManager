@@ -70,6 +70,7 @@ private:
     void processQueue();
     void startItem(DownloadItem *item);
     void stopDownloader(const QString &id, bool immediateDelete = false);
+    void cleanupOrphanParts();
     QString configFilePath() const;
     QString findIdByDownloader(QObject *downloader) const;
 

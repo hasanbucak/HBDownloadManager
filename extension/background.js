@@ -13,8 +13,6 @@ const NATIVE_HOST = 'com.hasanbucak.hbdownloadmanager';
 const BROWSER = IS_FIREFOX ? 'firefox' : IS_SAFARI ? 'safari' : (navigator.brave ? 'brave' : (/OPR\/|Opera/i.test(navigator.userAgent) ? 'opera' : (/Edg\//.test(navigator.userAgent) ? 'edge' : 'chrome')));
 
 const MEDIA_EXT = /\.(mp4|m4v|webm|mkv|mov|avi|flv|mp3|m4a|aac|ogg|opus|wav|flac)(\?|#|$)/i;
-const VIDEO_EXT = /\.(mp4|m4v|webm|mkv|mov|avi|flv)(\?|#|$)/i;
-const AUDIO_EXT = /\.(mp3|m4a|aac|ogg|opus|wav|flac)(\?|#|$)/i;
 const FRAGMENT = /\.(ts|m4s|m4f|cmfv|cmfa|fmp4|init)(\?|#|$)|[/_.-](seg|segment|chunk|frag|fragment)[-_]?\d+/i;
 const IGNORED_HOSTS = /(^|\.)googlevideo\.com$|(^|\.)fbcdn\.net$|(^|\.)twimg\.com$/i;
 
@@ -29,8 +27,11 @@ async function setSettings(patch) {
 }
 const base = (s) => `http://127.0.0.1:${s.port}`;
 
-// ---------- Auth token (Native host handshake) ----------
+// ---------- Auth token (native host handshake) ----------
+// The token is only ever used as an HMAC key: it is never sent to the bridge. A process that
+// squats the port while the app is down therefore learns nothing it could reuse.
 let cachedToken = null;
+const HAS_SESSION_STORAGE = !!api.storage?.session;
 
 if (api.storage?.session?.setAccessLevel) {
   try {
@@ -42,9 +43,9 @@ async function requestTokenFromNativeHost() {
   if (!api.runtime.sendNativeMessage) return null;
   try {
     const r = await api.runtime.sendNativeMessage(IS_SAFARI ? 'application.id' : NATIVE_HOST, { action: 'getToken' });
-    if (r && r.ok && r.token) {
+    if (r && r.ok && typeof r.token === 'string' && /^[0-9a-f]{64}$/.test(r.token)) {
       cachedToken = r.token;
-      if (api.storage?.session) {
+      if (HAS_SESSION_STORAGE) {
         await api.storage.session.set({ token: r.token });
       } else {
         await api.storage.local.set({ token: r.token });
@@ -58,99 +59,156 @@ async function requestTokenFromNativeHost() {
 async function getAuthToken() {
   if (cachedToken) return cachedToken;
   try {
-    if (api.storage?.session) {
-      const s = await api.storage.session.get('token');
-      if (s?.token) {
-        cachedToken = s.token;
-        return cachedToken;
-      }
-    } else {
-      const s = await api.storage.local.get('token');
-      if (s?.token) {
-        cachedToken = s.token;
-        return cachedToken;
-      }
+    const area = HAS_SESSION_STORAGE ? api.storage.session : api.storage.local;
+    const s = await area.get('token');
+    if (s?.token) {
+      cachedToken = s.token;
+      return cachedToken;
     }
   } catch {}
   return await requestTokenFromNativeHost();
 }
 
+const enc = new TextEncoder();
+const toHex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+function randomHex(bytes) {
+  const a = new Uint8Array(bytes);
+  crypto.getRandomValues(a);
+  return toHex(a);
+}
 async function hmacHex(keyStr, msg) {
-  const enc = new TextEncoder();
   const key = await crypto.subtle.importKey('raw', enc.encode(keyStr), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(msg));
-  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  return toHex(await crypto.subtle.sign('HMAC', key, enc.encode(msg)));
+}
+async function sha256Hex(str) {
+  return toHex(await crypto.subtle.digest('SHA-256', enc.encode(str)));
 }
 
-// Custom headers: Extension proof + secret token
-async function getBridgeHeaders(extraHeaders = {}) {
-  const token = await getAuthToken();
-  const headers = {
+// Signs one request; the server accepts each nonce once and only within 30 s of ts
+async function signedHeaders(token, method, path, body, extraHeaders = {}) {
+  const ts = String(Math.floor(Date.now() / 1000));
+  const nonce = randomHex(16);
+  const bodyHash = await sha256Hex(body || '');
+  const sig = await hmacHex(token, `hbdm-req:v1\n${method}\n${path}\n${ts}\n${nonce}\n${bodyHash}`);
+  return {
     'X-HBDM-Extension': BROWSER,
     'X-HBDM-Extension-Id': api.runtime.id,
+    'X-HBDM-Ts': ts,
+    'X-HBDM-Nonce': nonce,
+    'X-HBDM-Sig': sig,
     ...extraHeaders,
   };
-  if (token) {
-    headers['X-HBDM-Token'] = token;
+}
+
+// fetch + JSON with one timeout that also covers reading the body
+async function fetchJSON(url, init = {}, ms = 5000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    const r = await fetch(url, { cache: 'no-store', ...init, signal: ctrl.signal });
+    const body = await r.json().catch(() => null);
+    return { status: r.status, ok: r.ok, body };
+  } finally {
+    clearTimeout(timer);
   }
-  return headers;
 }
 
 // ---------- App communication ----------
+// lastPingStatus: 'ok' | 'offline' (nothing answered) | 'unverified' (no token to check with) |
+// 'mismatch' (something answered but could not prove it knows our token)
+let lastPingStatus = 'offline';
+let lastVerified = { port: 0, at: 0 };
+let mismatchNotified = false;
+
 async function ping(settings) {
   settings = settings || (await getSettings());
+  const nonce = randomHex(16);
+  let app = null;
   try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 1200);
-
-    // S7: Nonce challenge-response; token NEVER travels on /ping
-    const nonceBytes = new Uint8Array(16);
-    crypto.getRandomValues(nonceBytes);
-    const nonce = [...nonceBytes].map((b) => b.toString(16).padStart(2, '0')).join('');
-
-    const headers = {
-      'X-HBDM-Extension': BROWSER,
-      'X-HBDM-Extension-Id': api.runtime.id,
-    };
-    const r = await fetch(base(settings) + '/ping?nonce=' + nonce + '&browser=' + BROWSER, { signal: ctrl.signal, cache: 'no-store', headers });
-    clearTimeout(t);
-    if (!r.ok) return null;
-    const app = await r.json();
-    if (!app || !app.ok) return null;
-
-    const token = await getAuthToken();
-    if (token) {
-      const expected = await hmacHex(token, 'hbdm-ping:' + nonce);
-      if (app.proof !== expected) {
-        // Fake or rogue process listening on port!
-        return null;
-      }
-      app.genuine = true;
-    }
-
-    if (app && app.active > 0) startProgress();
-    if (app && Array.isArray(app.captureExtensions)) api.storage.local.set({ captureExtensions: app.captureExtensions });
-    return app;
+    const res = await fetchJSON(
+      base(settings) + '/ping?nonce=' + nonce + '&browser=' + BROWSER,
+      { headers: { 'X-HBDM-Extension': BROWSER, 'X-HBDM-Extension-Id': api.runtime.id } },
+      1500,
+    );
+    app = res.ok ? res.body : null;
   } catch {
+    app = null;
+  }
+  if (!app || !app.ok) {
+    lastPingStatus = 'offline';
     return null;
   }
+
+  const proofMsg = `hbdm-ping:v1:${settings.port}:${nonce}`;
+  let token = await getAuthToken();
+  if (!token) {
+    // Fail closed: without a token we cannot tell the app from an impostor
+    lastPingStatus = 'unverified';
+    return null;
+  }
+  if (app.proof !== (await hmacHex(token, proofMsg))) {
+    // The token may have been recreated since we cached it: fetch it once more
+    const fresh = await requestTokenFromNativeHost();
+    if (!fresh || app.proof !== (await hmacHex(fresh, proofMsg))) {
+      lastPingStatus = 'mismatch';
+      if (!mismatchNotified) {
+        mismatchNotified = true;
+        notify(t('notifOfflineTitle'), 'Port ' + settings.port + ': HB Download Manager could not be verified.');
+      }
+      return null;
+    }
+    token = fresh;
+  }
+
+  mismatchNotified = false;
+  lastPingStatus = 'ok';
+  lastVerified = { port: settings.port, at: Date.now() };
+  app.genuine = true;
+  if (app.active > 0) startProgress();
+  if (Array.isArray(app.captureExtensions)) api.storage.local.set({ captureExtensions: app.captureExtensions });
+  return app;
+}
+
+async function ensureVerified(settings) {
+  if (lastPingStatus === 'ok' && lastVerified.port === settings.port && Date.now() - lastVerified.at < 10000) {
+    return true;
+  }
+  return !!(await ping(settings));
+}
+
+// Signed request to the bridge; one retry with a refreshed token after a 403
+async function bridgeRequest(settings, method, path, payload) {
+  const body = payload === undefined ? '' : JSON.stringify(payload);
+  const send = async (token) => {
+    const headers = await signedHeaders(token, method, path, body, body ? { 'Content-Type': 'application/json' } : {});
+    return fetchJSON(base(settings) + path, method === 'GET' ? { method, headers } : { method, headers, body }, 8000);
+  };
+  let token = await getAuthToken();
+  if (!token) throw new Error('no bridge token');
+  let res = await send(token);
+  if (res.status === 403) {
+    token = await requestTokenFromNativeHost();
+    if (!token) throw new Error('forbidden');
+    res = await send(token);
+  }
+  return res;
 }
 
 // ---------- Download progress: toolbar badge + popup list ----------
-async function bridgeJSON(path, init) {
+async function bridgeJSON(path, method = 'GET', payload) {
   const settings = await getSettings();
-  const headers = await getBridgeHeaders(init?.headers);
-  const r = await fetch(base(settings) + path, { cache: 'no-store', ...init, headers });
-  return r.json();
+  if (!(await ensureVerified(settings))) throw new Error('app offline or unverified');
+  const res = await bridgeRequest(settings, method, path, payload);
+  return res.body;
 }
 async function getDownloads() {
   try { const j = await bridgeJSON('/downloads'); return (j && j.items) || []; } catch { return []; }
 }
 async function downloadAction(id, action) {
   try {
-    const j = await bridgeJSON('/action', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, action }) });
+    const j = await bridgeJSON('/action', 'POST', { id, action });
     tickProgress();
-    return j;
+    return j || { ok: false, error: 'no answer' };
   } catch (e) { return { ok: false, error: String(e) }; }
 }
 const ACTIVE_STATES = new Set(['downloading', 'probing']);
@@ -227,11 +285,12 @@ function notify(title, message) {
 async function sendToApp({ url, filename, referer, kind, quality, estimatedBytes }) {
   const settings = await getSettings();
   let app = await ping(settings);
-  if (!app && settings.autoLaunch) {
+  if (!app && settings.autoLaunch && lastPingStatus === 'offline') {
     app = await ensureApp(settings);
   }
   if (!app) {
-    return { ok: false, error: 'app offline or unverified' };
+    // Cookies are only ever sent to a bridge that proved it knows our token
+    return { ok: false, error: 'app ' + lastPingStatus };
   }
 
   const ck = await cookiesFor(url);
@@ -243,26 +302,10 @@ async function sendToApp({ url, filename, referer, kind, quality, estimatedBytes
   if (kind === 'video' || kind === 'audio') {
     payload.quality = quality || 'best';
   }
-  const post = async () => {
-    const headers = await getBridgeHeaders({ 'Content-Type': 'application/json' });
-    return fetch(base(settings) + '/download', {
-      method: 'POST', headers, body: JSON.stringify(payload),
-    });
-  };
   try {
-    let r;
-    try { r = await post(); } catch (e) {
-      // App not running: start it and try once more.
-      if (!settings.autoLaunch || !(await ensureApp(settings))) throw e;
-      await requestTokenFromNativeHost();
-      r = await post();
-    }
-    if (r.status === 403) {
-      await requestTokenFromNativeHost();
-      r = await post();
-    }
-    const j = await r.json();
-    if (!j.ok) throw new Error(j.error || 'app error');
+    const res = await bridgeRequest(settings, 'POST', '/download', payload);
+    const j = res.body;
+    if (!j || !j.ok) throw new Error((j && j.error) || 'app error');
     notify(kind === 'video' || kind === 'audio' ? t('notifVideoTitle') : t('notifSentTitle'), filename || url);
     startProgress();
     return { ok: true };
@@ -284,11 +327,13 @@ async function launchApp() {
   }
 }
 
-// Returns the app's ping answer, starting the app first when it is not running (waits up to ~12 s).
+// Returns the app's verified ping answer, starting the app first when NOTHING answers on the port
+// (waits up to ~12 s). A port that answers but cannot be verified is never "fixed" by launching.
 let launching = null;
 async function ensureApp(settings) {
-  let app = await ping(settings);
+  const app = await ping(settings);
   if (app) return app;
+  if (lastPingStatus !== 'offline') return null;
   if (!launching) {
     launching = (async () => {
       if (!(await launchApp())) return null;
@@ -296,10 +341,8 @@ async function ensureApp(settings) {
       while (Date.now() < until) {
         await new Promise((r) => setTimeout(r, 500));
         const a = await ping(settings);
-        if (a) {
-          await requestTokenFromNativeHost();
-          return a;
-        }
+        if (a) return a;
+        if (lastPingStatus === 'mismatch' || lastPingStatus === 'unverified') return null;
       }
       return null;
     })();
@@ -331,7 +374,7 @@ async function interceptDownload(item) {
   if (item.byExtensionId) return false;
   if (settings.minSizeMB > 0 && item.totalBytes > 0 && item.totalBytes < settings.minSizeMB * 1024 * 1024) return false;
   let app = await ping(settings);
-  if (!app && settings.autoLaunch) {
+  if (!app && settings.autoLaunch && lastPingStatus === 'offline') {
     // Only start the app for file types it would take (list remembered from its last answer).
     const { captureExtensions } = await api.storage.local.get('captureExtensions');
     if (matchesCaptureTypes({ captureExtensions }, item.filename || '', url)) app = await ensureApp(settings);
@@ -430,7 +473,7 @@ async function addMedia(tabId, info) {
   const list = await readMedia(tabId);
   const key = normalizeKey(info.url);
   const idx = list.findIndex((m) => m.key === key);
-  const entry = { ...info, key, name: info.name || guessName(info.url, info.type) };
+  const entry = { ...info, key, name: withExtension(info.name, info.url, info.type) };
   if (idx >= 0) {
     if ((info.size || 0) > (list[idx].size || 0)) list[idx] = { ...list[idx], ...entry };
     return;
@@ -452,6 +495,17 @@ function guessName(url, type) {
   } catch {
     return url;
   }
+}
+
+// Page-provided names (e.g. document.title) carry no extension: take it from the URL or the MIME type
+function withExtension(name, url, type) {
+  const fallback = guessName(url, type);
+  if (!name) return fallback;
+  const clean = String(name).replace(/[\/:*?"<>|\x00-\x1f]+/g, ' ').trim().slice(0, 120);
+  if (!clean) return fallback;
+  if (/\.[a-z0-9]{2,5}$/i.test(clean)) return clean;
+  const m = fallback.match(/\.([a-z0-9]{2,5})$/i);
+  return m ? clean + '.' + m[1] : clean;
 }
 
 function headerVal(headers, name) {
@@ -518,6 +572,10 @@ function createMenus() {
 }
 async function initServiceWorker() {
   createMenus();
+  if (HAS_SESSION_STORAGE) {
+    // Older versions kept the token in storage.local, which content scripts can read
+    try { await api.storage.local.remove(['bridgeToken', 'token']); } catch {}
+  }
   const token = await getAuthToken();
   if (!token) {
     await requestTokenFromNativeHost();
@@ -549,14 +607,22 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           const app = await ping(settings);
           const cached = app ? null : (await api.storage.local.get('captureExtensions')).captureExtensions;
           sendResponse({
-            online: !!app, app, settings, clickIntercept: !api.downloads?.onDeterminingFilename, isSafari: IS_SAFARI,
+            online: !!app, authState: lastPingStatus, app, settings, clickIntercept: !api.downloads?.onDeterminingFilename, isSafari: IS_SAFARI,
             canLaunch: !!api.runtime.sendNativeMessage, captureExtensions: (app && app.captureExtensions) || cached || [],
           });
           break;
         }
         case 'getMedia': sendResponse(await readMedia(msg.tabId)); break;
-        case 'downloads': sendResponse(await getDownloads()); break;
-        case 'action': sendResponse(await downloadAction(msg.id, msg.action)); break;
+        case 'downloads': {
+          if (sender.tab) throw new Error('Unauthorized');
+          sendResponse(await getDownloads());
+          break;
+        }
+        case 'action': {
+          if (sender.tab) throw new Error('Unauthorized');
+          sendResponse(await downloadAction(msg.id, msg.action));
+          break;
+        }
         case 'download': sendResponse(await sendToApp(msg)); break;
         case 'setSettings': {
           if (sender.tab) throw new Error('Unauthorized');
@@ -564,7 +630,11 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: true });
           break;
         }
-        case 'launchApp': sendResponse({ ok: await launchApp() }); break;
+        case 'launchApp': {
+          if (sender.tab) throw new Error('Unauthorized');
+          sendResponse({ ok: await launchApp() });
+          break;
+        }
         case 'pageMedia': {
           if (sender.tab) {
             for (const m of msg.items || []) {

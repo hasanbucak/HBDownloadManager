@@ -1,4 +1,8 @@
 #include "LocalServer.h"
+
+#ifndef HBDM_VERSION
+#define HBDM_VERSION "0.0.0-dev"
+#endif
 #include "PathUtils.h"
 #include "MediaHosts.h"
 #include "../core/DownloadManager.h"
@@ -12,6 +16,9 @@
 #include <QMessageAuthenticationCode>
 #include <QUrlQuery>
 #include <QCoreApplication>
+#include <QCryptographicHash>
+#include <QDateTime>
+#include <QRegularExpression>
 #include <sys/stat.h>
 #include "BridgeToken.h"
 
@@ -72,13 +79,17 @@ void LocalServer::ensureToken() {
     m_token = BridgeToken::getOrCreateToken();
 }
 
+quint16 LocalServer::effectivePort() const {
+    return (m_server && m_server->isListening()) ? m_server->serverPort() : m_port;
+}
+
 bool LocalServer::isHostAllowed(const QString &rawHost) const {
     QString host = rawHost.trimmed().toLower();
     if (host.isEmpty()) {
         return false;
     }
 
-    quint16 p = (m_server && m_server->isListening()) ? m_server->serverPort() : m_port;
+    quint16 p = effectivePort();
     if (host == QString("127.0.0.1:%1").arg(p) || host == QString("localhost:%1").arg(p)) {
         return true;
     }
@@ -102,6 +113,61 @@ static bool constantTimeCompare(const QString &a, const QString &b) {
         diff |= (baA.at(i) ^ baB.at(i));
     }
     return (diff == 0);
+}
+
+// Every request except GET /ping must carry an HMAC signature made with the shared token:
+//   X-HBDM-Sig = hex(HMAC-SHA256(token, "hbdm-req:v1\n" + METHOD + "\n" + path + "\n" + ts + "\n" + nonce + "\n" + hex(SHA-256(body))))
+// The token itself never travels, a timestamp older than 30 s is rejected and a nonce is accepted once.
+bool LocalServer::verifySignedRequest(const HttpRequest &req) {
+    if (m_token.isEmpty()) {
+        return false;
+    }
+
+    static const QRegularExpression nonceRe(QStringLiteral("^[0-9a-f]{32}$"));
+    static const QRegularExpression sigRe(QStringLiteral("^[0-9a-f]{64}$"));
+
+    const QString tsStr = req.m_headers.value("x-hbdm-ts");
+    const QString nonce = req.m_headers.value("x-hbdm-nonce");
+    const QString sig = req.m_headers.value("x-hbdm-sig");
+    bool tsOk = false;
+    const qint64 ts = tsStr.toLongLong(&tsOk);
+    if (!tsOk || !nonceRe.match(nonce).hasMatch() || !sigRe.match(sig).hasMatch()) {
+        return false;
+    }
+
+    const qint64 now = QDateTime::currentSecsSinceEpoch();
+    if (qAbs(now - ts) > 30) {
+        return false;
+    }
+
+    for (QHash<QString, qint64>::iterator it = m_seenNonces.begin(); it != m_seenNonces.end();) {
+        if (now - it.value() > 120) {
+            it = m_seenNonces.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    if (m_seenNonces.contains(nonce)) {
+        return false;
+    }
+
+    const QByteArray bodyHash = QCryptographicHash::hash(req.m_body, QCryptographicHash::Sha256).toHex();
+    QByteArray message("hbdm-req:v1\n");
+    message += req.m_method.toUtf8() + '\n';
+    message += req.m_path.toUtf8() + '\n';
+    message += tsStr.toUtf8() + '\n';
+    message += nonce.toUtf8() + '\n';
+    message += bodyHash;
+    const QString expected = QString::fromLatin1(
+        QMessageAuthenticationCode::hash(message, m_token.toUtf8(), QCryptographicHash::Sha256).toHex());
+    if (!constantTimeCompare(sig, expected)) {
+        return false;
+    }
+
+    if (m_seenNonces.size() < 100000) {
+        m_seenNonces.insert(nonce, now);
+    }
+    return true;
 }
 
 void LocalServer::onNewConnection() {
@@ -191,7 +257,9 @@ bool LocalServer::isOriginAllowed(const QString &rawOrigin, const QMap<QString, 
     if (origin.endsWith('/')) origin.chop(1);
 
     static const QString s_chromeOrigin = QStringLiteral("chrome-extension://fmlcahmlpfmfnnemigpbbbnmkikepjko");
+    static const QString s_chromeDevOrigin = QStringLiteral("chrome-extension://afdfemednfkkmmbpliapapodafgbbeme");
     if (origin == s_chromeOrigin ||
+        origin == s_chromeDevOrigin ||
         origin.startsWith("moz-extension://") ||
         origin.startsWith("safari-web-extension://")) {
         return true;
@@ -276,8 +344,7 @@ void LocalServer::handleRequest(QTcpSocket *socket, const HttpRequest &req) {
     QString pathOnly = req.m_path.split('?').first();
 
     if (!(req.m_method == "GET" && pathOnly == "/ping")) {
-        QString clientToken = req.m_headers.value("x-hbdm-token");
-        if (m_token.isEmpty() || clientToken.isEmpty() || !constantTimeCompare(clientToken, m_token)) {
+        if (!verifySignedRequest(req)) {
             QJsonObject errObj;
             errObj["ok"] = false;
             errObj["error"] = "forbidden";
@@ -290,7 +357,7 @@ void LocalServer::handleRequest(QTcpSocket *socket, const HttpRequest &req) {
         QJsonObject pingObj;
         pingObj["ok"] = true;
         pingObj["app"] = "HBDownloadManager";
-        pingObj["version"] = QCoreApplication::applicationVersion().isEmpty() ? QStringLiteral("1.3.0") : QCoreApplication::applicationVersion();
+        pingObj["version"] = QCoreApplication::applicationVersion().isEmpty() ? QStringLiteral(HBDM_VERSION) : QCoreApplication::applicationVersion();
         pingObj["ytdlp"] = VideoDownloader::isAvailable();
         pingObj["ytdlpVersion"] = VideoDownloader::ytDlpVersion();
         pingObj["ffmpeg"] = VideoDownloader::isFfmpegAvailable();
@@ -299,9 +366,11 @@ void LocalServer::handleRequest(QTcpSocket *socket, const HttpRequest &req) {
         QUrl queryUrl("http://localhost" + req.m_path);
         QUrlQuery query(queryUrl);
         QString nonce = query.queryItemValue("nonce");
-        if (!nonce.isEmpty() && !m_token.isEmpty()) {
+        static const QRegularExpression pingNonceRe(QStringLiteral("^[0-9a-f]{32}$"));
+        if (pingNonceRe.match(nonce).hasMatch() && !m_token.isEmpty()) {
+            // Bound to the port we really listen on: a listener on another port cannot relay it
             QByteArray proof = QMessageAuthenticationCode::hash(
-                QString("hbdm-ping:" + nonce).toUtf8(),
+                QString("hbdm-ping:v1:%1:%2").arg(effectivePort()).arg(nonce).toUtf8(),
                 m_token.toUtf8(),
                 QCryptographicHash::Sha256
             ).toHex();
@@ -489,7 +558,7 @@ void LocalServer::sendResponse(QTcpSocket *socket, int statusCode, const QJsonOb
     if (!origin.isEmpty() && isOriginAllowed(origin, QMap<QString, QString>())) {
         response.append(QString("Access-Control-Allow-Origin: %1\r\n").arg(origin).toUtf8());
         response.append("Vary: Origin\r\n");
-        response.append("Access-Control-Allow-Headers: Content-Type, X-HBDM-Extension, X-HBDM-Extension-Id, X-HBDM-Token\r\n");
+        response.append("Access-Control-Allow-Headers: Content-Type, X-HBDM-Extension, X-HBDM-Extension-Id, X-HBDM-Ts, X-HBDM-Nonce, X-HBDM-Sig\r\n");
         response.append("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n");
         response.append("Access-Control-Allow-Private-Network: true\r\n");
         response.append("Access-Control-Allow-Local-Network: true\r\n");

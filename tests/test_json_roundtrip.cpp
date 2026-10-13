@@ -7,6 +7,7 @@
 #include <QDir>
 #include <QStandardPaths>
 #include "DownloadItem.h"
+#include "test_guard.h"
 
 class TestJsonRoundtrip : public QObject {
     Q_OBJECT
@@ -22,7 +23,8 @@ private slots:
 };
 
 void TestJsonRoundtrip::initTestCase() {
-    QStandardPaths::setTestModeEnabled(true);
+    QString why;
+    QVERIFY2(TestGuard::enterSandbox(&why), qPrintable(why));
 }
 
 void TestJsonRoundtrip::testCompleteItemRoundtrip() {
@@ -154,7 +156,8 @@ void TestJsonRoundtrip::testEmptyJsonObject() {
     const DownloadItem item = DownloadItem::fromJson(emptyObj);
 
     // Must not crash and should provide sane defaults
-    QVERIFY(item.m_id.isEmpty());
+    // E12: an item without a usable id gets a fresh UUID (never a shared ".dm-unknown.part")
+    QVERIFY(!item.m_id.isEmpty());
     QCOMPARE(item.m_kind, DownloadKindFile);
     QCOMPARE(item.m_state, DownloadStateQueued);
     QCOMPARE(item.m_totalBytes, 0LL);

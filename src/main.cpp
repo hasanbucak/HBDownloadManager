@@ -1,4 +1,8 @@
 #include <QApplication>
+
+#ifndef HBDM_VERSION
+#define HBDM_VERSION "0.0.0-dev"
+#endif
 #include <QIcon>
 #include <QLocalServer>
 #include <QLocalSocket>
@@ -18,13 +22,19 @@
 #include <QTranslator>
 #include <QLocale>
 #include <csignal>
+#include <cerrno>
+#include <cstring>
 #include <sys/socket.h>
 
 static int s_sigFd[2] = {-1, -1};
+static bool s_quitRequested = false;
+
 static void onUnixSignal(int) {
+    const int savedErrno = errno;  // async-signal-safe: only write(), and errno is restored
     const char c = 1;
     ssize_t r = ::write(s_sigFd[0], &c, 1);
     (void)r;
+    errno = savedErrno;
 }
 
 int main(int argc, char *argv[]) {
@@ -32,32 +42,51 @@ int main(int argc, char *argv[]) {
     app.setQuitOnLastWindowClosed(false);
     app.setApplicationName("hb-download-manager");
     app.setApplicationDisplayName("HB Download Manager (Linux)");
-    app.setApplicationVersion("1.3.0");
+    app.setApplicationVersion(QStringLiteral(HBDM_VERSION));
     app.setOrganizationName("HasanBucak");
     app.setOrganizationDomain("hasanbucak.com");
     app.setWindowIcon(QIcon(":/icons/app_icon.png"));
 
-    // U13: Load localization translator based on system locale
+    // U11: Turkish is the source language. Load a catalog only when the user's FIRST UI language
+    // is not Turkish (Turkish with English as a secondary language must stay Turkish).
     QTranslator translator;
     const QStringList uiLanguages = QLocale::system().uiLanguages();
-    for (const QString &locale : uiLanguages) {
-        const QString baseName = "hbdm_" + QLocale(locale).name();
-        if (translator.load(":/i18n/" + baseName) ||
-            translator.load(baseName, QCoreApplication::applicationDirPath() + "/translations") ||
-            translator.load(baseName, "/usr/share/hb-download-manager/translations")) {
-            app.installTranslator(&translator);
-            break;
+    if (!uiLanguages.isEmpty() && !uiLanguages.first().startsWith("tr", Qt::CaseInsensitive)) {
+        for (int li = 0; li < uiLanguages.size(); ++li) {
+            const QLocale loc(uiLanguages.at(li));
+            if (loc.language() == QLocale::Turkish) {
+                break;
+            }
+            QStringList names;
+            names << QStringLiteral("hbdm_") + loc.name()
+                  << QStringLiteral("hbdm_") + loc.name().section('_', 0, 0);
+            bool loaded = false;
+            for (int ni = 0; ni < names.size() && !loaded; ++ni) {
+                const QString &baseName = names.at(ni);
+                loaded = translator.load(":/i18n/" + baseName) ||
+                         translator.load(baseName, QCoreApplication::applicationDirPath() + "/translations") ||
+                         translator.load(baseName, "/usr/share/hb-download-manager/translations");
+            }
+            if (loaded) {
+                app.installTranslator(&translator);
+                break;
+            }
         }
     }
 
     // D6: Self-pipe pattern for clean termination on SIGTERM, SIGHUP, SIGINT
     if (::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, s_sigFd) == 0) {
         QSocketNotifier *sigNotifier = new QSocketNotifier(s_sigFd[1], QSocketNotifier::Read, &app);
-        QObject::connect(sigNotifier, &QSocketNotifier::activated, &app, [&app]() {
+        QObject::connect(sigNotifier, &QSocketNotifier::activated, &app, []() {
             char c;
             ssize_t r = ::read(s_sigFd[1], &c, 1);
             (void)r;
-            app.quit();
+            s_quitRequested = true;
+            QCoreApplication::instance()->setProperty("hbdmQuitting", true);
+            // exit() leaves every running event loop (also a modal dialog's) without asking the
+            // windows to close; quit() could be refused by MainWindow::closeEvent in Qt 6.
+            // aboutToQuit -> DownloadManager::shutdown() then pauses and saves everything.
+            QCoreApplication::exit(0);
         });
 
         struct sigaction sa;
@@ -70,22 +99,37 @@ int main(int argc, char *argv[]) {
         ::sigaction(SIGINT, &sa, NULL);
     }
 
-    QString runtimeDir = qEnvironmentVariable("XDG_RUNTIME_DIR");
+    // Per-user runtime dir (Qt checks owner and 0700). The fallback keeps the uid in the names so
+    // another user cannot pre-create them in a shared /tmp.
+    QString runtimeDir = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+    QString nameSuffix;
     if (runtimeDir.isEmpty() || !QDir(runtimeDir).exists()) {
         runtimeDir = QDir::tempPath();
+        nameSuffix = "-" + QString::number(::getuid());
     }
-    const QString lockPath = runtimeDir + "/hb-download-manager.lock";
-    const QString sockPath = runtimeDir + "/hb-download-manager.sock";
+    const QString lockPath = runtimeDir + "/hb-download-manager" + nameSuffix + ".lock";
+    const QString sockPath = runtimeDir + "/hb-download-manager" + nameSuffix + ".sock";
 
     QLockFile lockFile(lockPath);
-    lockFile.setStaleLockTime(10000);
+    // 0 = never stale by age; a lock is only taken over when its owner process is gone.
+    // (A non-zero value lets a second launch steal the live lock once that much time has passed.)
+    lockFile.setStaleLockTime(0);
     bool isFirstInstance = lockFile.tryLock(500);
 
     if (!isFirstInstance) {
         // Zaten çalışan bir kopya var! Komut satırı argümanlarını mevcut örneğe ilet
+        // The first instance may hold the lock but not listen yet: retry for about 3 s
         QLocalSocket socket;
-        socket.connectToServer(sockPath);
-        if (socket.waitForConnected(1000)) {
+        bool connected = false;
+        for (int attempt = 0; attempt < 6 && !connected; ++attempt) {
+            socket.connectToServer(sockPath);
+            connected = socket.waitForConnected(500);
+            if (!connected) {
+                socket.abort();
+                ::usleep(250 * 1000);
+            }
+        }
+        if (connected) {
             QStringList args = app.arguments();
             QByteArray payload;
             for (int i = 1; i < args.size(); ++i) {
@@ -115,6 +159,9 @@ int main(int argc, char *argv[]) {
         qWarning("Yerel tekil soket sunucusu başlatılamadı '%s': %s",
                  qPrintable(sockPath), qPrintable(localServer.errorString()));
     }
+
+    // yt-dlp sürümünü arka planda öğren: /ping hiçbir zaman GUI thread'ini bekletmez
+    VideoDownloader::prefetchYtDlpVersion();
 
     // Çekirdek indirme yöneticisi
     DownloadManager &dm = DownloadManager::instance();
@@ -186,7 +233,7 @@ int main(int argc, char *argv[]) {
     }
 
     // Eğer doğrudan link verilmişse: hb-download-manager <url> veya --url <url>
-    for (int i = 1; i < args.size(); ++i) {
+    for (int i = 1; i < args.size() && !s_quitRequested; ++i) {
         QString arg = args.at(i);
         QString urlCandidate;
         if (arg == "--url" && i + 1 < args.size()) {
@@ -200,6 +247,12 @@ int main(int argc, char *argv[]) {
                 dm.addDownload(dlg.downloadItem(), dlg.shouldStartImmediately());
             }
         }
+    }
+
+    if (s_quitRequested) {
+        // A signal arrived while a start-up dialog was open: exec() would start a fresh loop
+        dm.shutdown();
+        return 0;
     }
 
     if (!startMinimized) {

@@ -6,6 +6,9 @@
 #include "MediaHosts.h"
 
 #include <QStandardPaths>
+#include <QFile>
+#include <QChar>
+#include "test_guard.h"
 
 class TestPathUtils : public QObject {
     Q_OBJECT
@@ -24,10 +27,18 @@ private slots:
     void testSafeJoinInvalidDir();
     void testUniqueTargetPathLongFileName();
     void testMediaHostsStreamingSite();
-};
+    void testUniqueTargetPathKeepsParenthesizedYear();
+    void testSanitizeTruncationIsSurrogateSafe();
+    void testUniqueTargetPathTruncationIsSurrogateSafe();
+    void testIsInsideDir();
+
+private:
+    static QString emojiString(int count);
+    static void verifyValidUtf16(const QString &s);};
 
 void TestPathUtils::initTestCase() {
-    QStandardPaths::setTestModeEnabled(true);
+    QString why;
+    QVERIFY2(TestGuard::enterSandbox(&why), qPrintable(why));
 }
 
 void TestPathUtils::testSanitizeRelativeTraversal() {
@@ -179,6 +190,137 @@ void TestPathUtils::testMediaHostsStreamingSite() {
     QCOMPARE(MediaHosts::isStreamingSite(QStringLiteral("xbox.com")), false);
     QCOMPARE(MediaHosts::isStreamingSite(QStringLiteral("youtu.be")), true);
     QCOMPARE(MediaHosts::isStreamingSite(QStringLiteral("vimeo.com")), true);
+}
+
+QString TestPathUtils::emojiString(int count) {
+    // U+1F600 is stored as a surrogate pair in UTF-16
+    QString s;
+    for (int i = 0; i < count; ++i) {
+        s.append(QChar::highSurrogate(0x1F600));
+        s.append(QChar::lowSurrogate(0x1F600));
+    }
+    return s;
+}
+
+void TestPathUtils::verifyValidUtf16(const QString &s) {
+    for (int i = 0; i < s.size(); ++i) {
+        const QChar c = s.at(i);
+        QVERIFY2(c.unicode() != 0xFFFD, "U+FFFD replacement character found");
+        if (c.isHighSurrogate()) {
+            QVERIFY2(i + 1 < s.size() && s.at(i + 1).isLowSurrogate(), "lone high surrogate");
+            ++i;
+        } else {
+            QVERIFY2(!c.isLowSurrogate(), "lone low surrogate");
+        }
+    }
+    // A valid string survives a UTF-8 round trip unchanged
+    QCOMPARE(QString::fromUtf8(s.toUtf8()), s);
+}
+
+void TestPathUtils::testUniqueTargetPathKeepsParenthesizedYear() {
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    const QString base = tempDir.path();
+
+    // E6: "(2019)" belongs to the name and must not be stripped
+    const QString first = PathUtils::uniqueTargetPath(base, QStringLiteral("Movie (2019).mkv"));
+    QCOMPARE(QFileInfo(first).fileName(), QStringLiteral("Movie (2019).mkv"));
+
+    QFile f(first);
+    QVERIFY(f.open(QIODevice::WriteOnly));
+    f.write("x");
+    f.close();
+
+    const QString second = PathUtils::uniqueTargetPath(base, QStringLiteral("Movie (2019).mkv"));
+    QCOMPARE(QFileInfo(second).fileName(), QStringLiteral("Movie (2019) (1).mkv"));
+}
+
+void TestPathUtils::testSanitizeTruncationIsSurrogateSafe() {
+    // 300 emoji = 1200 UTF-8 bytes: must be cut to <= 240 bytes on a character boundary
+    const QString longEmoji = emojiString(300);
+    const QString cut = PathUtils::sanitizeFileName(longEmoji);
+    QVERIFY(!cut.isEmpty());
+    QVERIFY(cut.toUtf8().size() <= 240);
+    verifyValidUtf16(cut);
+
+    // The same with an extension that has to survive
+    const QString cutExt = PathUtils::sanitizeFileName(longEmoji + QStringLiteral(".zip"));
+    QVERIFY(cutExt.toUtf8().size() <= 240);
+    QVERIFY(cutExt.endsWith(QStringLiteral(".zip")));
+    verifyValidUtf16(cutExt);
+
+    // 239 ASCII bytes + one emoji (4 bytes) = 243: the emoji must go away as a whole
+    const QString edge = QString(239, QLatin1Char('a')) + emojiString(1);
+    const QString cutEdge = PathUtils::sanitizeFileName(edge);
+    QVERIFY(cutEdge.toUtf8().size() <= 240);
+    verifyValidUtf16(cutEdge);
+    QVERIFY(!cutEdge.contains(QChar::highSurrogate(0x1F600)));
+}
+
+void TestPathUtils::testUniqueTargetPathTruncationIsSurrogateSafe() {
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    const QString base = tempDir.path();
+
+    const QString name = emojiString(300) + QStringLiteral(".bin");
+    const QString first = PathUtils::uniqueTargetPath(base, name);
+    QVERIFY(QFileInfo(first).fileName().toUtf8().size() <= 240);
+    verifyValidUtf16(QFileInfo(first).fileName());
+
+    QFile f(first);
+    QVERIFY(f.open(QIODevice::WriteOnly));
+    f.write("x");
+    f.close();
+
+    // The " (1)" tag forces another cut; it must still end on a character boundary
+    const QString second = PathUtils::uniqueTargetPath(base, name);
+    QVERIFY(second != first);
+    QVERIFY(QFileInfo(second).fileName().toUtf8().size() <= 240);
+    QVERIFY(second.contains(QStringLiteral(" (1).bin")));
+    verifyValidUtf16(QFileInfo(second).fileName());
+}
+
+void TestPathUtils::testIsInsideDir() {
+    QTemporaryDir tempDir;
+    QTemporaryDir otherDir;
+    QVERIFY(tempDir.isValid());
+    QVERIFY(otherDir.isValid());
+    const QString dir = tempDir.path();
+    const QString other = otherDir.path();
+
+    // directly inside, and in an existing sub folder
+    QVERIFY(PathUtils::isInsideDir(dir + "/file.bin", dir));
+    QVERIFY(QDir().mkpath(dir + "/sub/deeper"));
+    QVERIFY(PathUtils::isInsideDir(dir + "/sub/deeper/file.bin", dir));
+
+    // outside: a sibling temp dir, the parent, an absolute system path
+    QVERIFY(!PathUtils::isInsideDir(other + "/file.bin", dir));
+    QVERIFY(!PathUtils::isInsideDir(QFileInfo(dir).absolutePath() + "/file.bin", dir));
+    QVERIFY(!PathUtils::isInsideDir(QStringLiteral("/etc/passwd"), dir));
+
+    // ".." that climbs out of the folder
+    QVERIFY(!PathUtils::isInsideDir(dir + "/sub/../../escape.bin", dir));
+    // ".." that stays inside
+    QVERIFY(PathUtils::isInsideDir(dir + "/sub/../file.bin", dir));
+
+    // a prefix match is not enough: "<dir>-evil" is not inside "<dir>"
+    QVERIFY(QDir().mkpath(dir + "-evil"));
+    QVERIFY(!PathUtils::isInsideDir(dir + "-evil/file.bin", dir));
+    QDir().rmdir(dir + "-evil");
+
+    // a symlinked FOLDER inside dir that points outside: files below it are outside
+    QVERIFY(QFile::link(other, dir + "/lnk"));
+    QVERIFY(!PathUtils::isInsideDir(dir + "/lnk/file.bin", dir));
+
+    // a symlinked FILE is judged by where the link lives
+    QVERIFY(QFile::link(other + "/target.bin", dir + "/filelink"));
+    QVERIFY(PathUtils::isInsideDir(dir + "/filelink", dir));
+
+    // missing folders: false, never a crash
+    QVERIFY(!PathUtils::isInsideDir(dir + "/missing/file.bin", dir));
+    QVERIFY(!PathUtils::isInsideDir(dir + "/file.bin", dir + "/does-not-exist"));
+    QVERIFY(!PathUtils::isInsideDir(QString(), dir));
+    QVERIFY(!PathUtils::isInsideDir(dir + "/file.bin", QString()));
 }
 
 QTEST_MAIN(TestPathUtils)

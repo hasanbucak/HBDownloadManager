@@ -8,7 +8,7 @@
 class PathUtils {
 public:
     // Sanitizes untrusted filename inputs (e.g. from HTTP headers, REST payloads, dialogs).
-    // Decodes percent encoding, strips path traversal components (.. and slashes),
+    // Does not percent-decode (header parsers decode once). Strips path traversal components (.. and slashes),
     // replaces control characters with underscores, strips leading dots to prevent hidden files,
     // limits length to 240 UTF-8 bytes (preserving extension if <= 10 chars),
     // and falls back to "download" if empty.
@@ -21,4 +21,7 @@ public:
 
     // Resolves unique non-colliding target path within 240 UTF-8 bytes limit.
     static QString uniqueTargetPath(const QString &baseDir, const QString &fileName, const QString &id = QString());
+
+    // True when path lies in dir or below it (parents resolved canonically). False if either is missing.
+    static bool isInsideDir(const QString &path, const QString &dir);
 };

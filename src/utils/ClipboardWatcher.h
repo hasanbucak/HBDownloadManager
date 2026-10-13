@@ -13,6 +13,8 @@ public:
     bool isEnabled() const { return m_enabled; }
     void setEnabled(bool enabled) { m_enabled = enabled; }
     static void ignoreUrl(const QString &url);
+    // Forget the last seen clipboard URL (call when its dialog closed) so it can be offered again
+    static void resetLastUrl();
 
 signals:
     void atUrlDetected(const QUrl &url);
@@ -25,5 +27,4 @@ private:
 
     QClipboard *m_clipboard;
     bool m_enabled;
-    QString m_lastUrl;
 };

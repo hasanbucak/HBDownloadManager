@@ -245,9 +245,7 @@ DownloadItem DownloadItem::fromJson(const QJsonObject &obj) {
     DownloadItem item;
     static const QRegularExpression idRegex("^[a-zA-Z0-9_-]+$");
     QString rawId = obj["id"].toString();
-    if (rawId.isEmpty()) {
-        item.m_id.clear();
-    } else if (idRegex.match(rawId).hasMatch() && rawId.length() <= 64) {
+    if (!rawId.isEmpty() && idRegex.match(rawId).hasMatch() && rawId.length() <= 64) {
         item.m_id = rawId;
     } else {
         item.m_id = QUuid::createUuid().toString(QUuid::WithoutBraces);

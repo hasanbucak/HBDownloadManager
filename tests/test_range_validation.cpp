@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <QStandardPaths>
 #include "SegmentedDownloader.h"
+#include "test_guard.h"
 
 class TestRangeValidation : public QObject {
     Q_OBJECT
@@ -22,7 +23,8 @@ private slots:
 };
 
 void TestRangeValidation::initTestCase() {
-    QStandardPaths::setTestModeEnabled(true);
+    QString why;
+    QVERIFY2(TestGuard::enterSandbox(&why), qPrintable(why));
 }
 
 void TestRangeValidation::testGoodContentRange() {

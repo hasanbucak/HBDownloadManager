@@ -8,6 +8,8 @@
 #include <QAction>
 #include <QLabel>
 #include <QMap>
+#include <QQueue>
+#include <QUrl>
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -19,6 +21,8 @@ public:
 
 public slots:
     void onUrlDetected(const QUrl &url);
+    // Opens an empty "new download" dialog through the same queue (tray menu, toolbar)
+    void requestNewDownload();
 
 private slots:
     void onNewDownloadClicked();
@@ -32,6 +36,7 @@ private slots:
     void onTableDoubleClicked(int row, int column);
     void onTableContextMenu(const QPoint &pos);
     void onInstallHostBridgeClicked();
+    void processUrlQueue();
 
     void onItemAdded(const DownloadItem &item);
     void onItemUpdated(const DownloadItem &item);
@@ -54,6 +59,11 @@ private:
     bool matchesFilter(const DownloadItem &item) const;
     QString selectedDownloadId() const;
     int findRowById(const QString &id) const;
+    void updateStatusBar();
+    void removeWithConfirmation(const QString &id);
+    void updateToolWarnings();
+    void saveWindowState();
+    void restoreWindowState();
 
     QToolBar *m_toolBar;
     QAction *m_actNew;
@@ -70,7 +80,10 @@ private:
     QLabel *m_statusSpeedLabel;
     QLabel *m_statusActiveLabel;
     QLabel *m_statusServerLabel;
+    QLabel *m_statusToolsLabel;
 
     int m_selectedCategory;
+    QQueue<QUrl> m_pendingUrls;   // an empty QUrl means "blank new-download dialog"
+    bool m_dialogOpen;
     QMap<QString, QString> m_rowToIdMap;
 };

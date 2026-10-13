@@ -134,7 +134,7 @@ Bu doküman, **HB Download Manager** projesinin tüm mimarisini, veri akışlar�
 #### 2. Sunucu ve IPC Katmanı (`src/server/` & `src/native_host/`)
 * **`LocalServer.h` & `LocalServer.cpp`**:
   * `127.0.0.1:48213` IP ve portunu dinleyen yerel HTTP REST sunucusudur (`QTcpServer`).
-  * Güvenlik: Yalnızca `127.0.0.1` bağlantılarını kabul eder (DNS rebinding koruması). Token bazlı kimlik doğrulama (`X-HBDM-Token`) ve tarayıcı eklentisi için HMAC challenge-response protokolü (`/ping` üzerinden rastgele `nonce` ve SHA-256 HMAC kanıtı) uygular. Token dosyasını (`~/.config/hb-download-manager/token`) atomik ve 0600 izinleriyle oluşturur.
+  * Güvenlik: Yalnızca `127.0.0.1` bağlantılarını kabul eder (DNS rebinding koruması). İmzalı istek modeli uygular: `GET /ping` dışındaki her istek `X-HBDM-Ts`, `X-HBDM-Nonce` (32 hex) ve `X-HBDM-Sig = hex(HMAC-SHA256(token, "hbdm-req:v1\n" + METOT + "\n" + yol + "\n" + ts + "\n" + nonce + "\n" + hex(SHA-256(gövde))))` başlıklarını taşır; 30 saniyeden eski/ileri zaman damgası ve son 120 saniyede görülen `nonce` reddedilir, ham `X-HBDM-Token` başlığı kabul edilmez (token ağa hiç çıkmaz). Tarayıcı eklentisi için `/ping?nonce=<32 hex>` yalnızca geçerli nonce için porta bağlı kanıt döner: `HMAC-SHA256(token, "hbdm-ping:v1:" + port + ":" + nonce)`. Token dosyası `~/.config/hb-download-manager/bridge-token` (64 hex karakter, 0600) `BridgeToken.h` ile atomik oluşturulur; geçersiz içerik yenisiyle değiştirilir, kaydedilemezse boş dize döner.
   * Uç Noktalar (Endpoints):
     * `GET /ping`: Uygulamanın ayakta olup olmadığını, sürümünü ve yakalanan dosya uzantılarını döner.
     * `GET /downloads`: Aktif ve geçmiş indirmelerin durumunu döner.
@@ -247,9 +247,24 @@ make -f Makefile.host -j$(nproc)
 # Servisi arka planda başlat
 ./hb-download-manager --tray &
 
-# Ping atarak kontrol et
-curl -s -H "X-HBDM-Extension: chrome" http://127.0.0.1:48213/ping
+# Ping atarak kontrol et (/ping imza gerektirmez; nonce verirseniz porta bağlı "proof" alanı da döner)
+curl -s -H "X-HBDM-Extension: chrome" "http://127.0.0.1:48213/ping?nonce=0123456789abcdef0123456789abcdef"
 
 # Beklenen Yanıt:
 # {"active":0,"app":"HBDownloadManager","captureExtensions":[...],"ok":true,"version":"1.3.0","ytdlp":true}
 ```
+
+### Testler:
+```bash
+./run_tests.sh   # qmake ile derler; test_rangeplanner, test_range_validation, test_pathutils, test_json_roundtrip,
+                 # test_bridge_auth, test_download_lifecycle, test_engine_integration; test_server.py --self-test;
+                 # node --check; scripts/check_version.sh; gerçek downloads.json ve bridge-token için md5 koruması
+ctest --test-dir build --output-on-failure   # CMake yolu (QT_QPA_PLATFORM=offscreen)
+```
+`tests/test_server.py` HTTP/1.1 üzerinde 16 MiB'lık deterministik bir yük sunar (If-Range, zayıf ETag, durma, değişen dosya, aralıksız sunucu, kesilen bağlantı uç noktaları ve `/stats`). Her test `tests/test_guard.h` ile `HOME`, `XDG_*` ve `QSettings` yollarını geçici bir klasöre taşır.
+
+### Dil Kararı:
+Kaynak dil **Türkçe**dir (`tr()` metinleri Türkçe). Tam İngilizce katalog `translations/hbdm_en.ts` dosyasındadır, `lrelease` ile derlenip `:/i18n/` altına gömülür. `main.cpp` kataloğu yalnızca sistemin **ilk** arayüz dili Türkçe değilse yükler.
+
+### Sürüm:
+`VERSION` dosyası tek kaynaktır (`HBDM_VERSION` tanımı); `scripts/check_version.sh` eklenti manifestosu ve `safari/Info.plist` ile karşılaştırır.

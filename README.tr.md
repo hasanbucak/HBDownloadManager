@@ -14,7 +14,7 @@ Standart Qt/C++ mimari ve kodlama kurallarına (`m_` üye değişkenleri, `at*` 
    * `pwrite64` ile gelen baytları kendi offset'lerine atomik yazar; indirme bittiğinde dosyaları birleştirme (merge) bekleme süresi **sıfırdır**.
    * Sunucu `Range` desteklemiyorsa otomatik tek akışa (`single stream`) düşer.
 2. **Kusursuz Duraklat / Devam Et (Pause & Resume):**
-   * **Büyük Dosyalar:** Parça bayt offsetleri diske ve JSON state dosyasına anlık kaydedilir. Duraklatıldığında veya uygulama yeniden açıldığında `.part` dosyasındaki kaldığı bayttan devam eder.
+   * **Büyük Dosyalar:** Parça bayt offsetleri her 5 saniyede bir (`fdatasync` ile veri diske yazıldıktan sonra) ve duraklatma/çıkış sırasında JSON state dosyasına kaydedilir; JSON diskteki veriden hiçbir zaman ileride olmaz. Duraklatıldığında veya uygulama yeniden açıldığında `.part` dosyasındaki kaldığı bayttan devam eder.
    * **Video Akışları (yt-dlp):** Duraklatıldığında süreç `SIGTERM` ile nazikçe kapatılarak `.part` dosyası korunur. Devam et denildiğinde `--continue` ile kaldığı bayt/parçadan indirilir.
 3. **IDM Tarzı Yüzen Video İndirme Butonu (Floating Overlay Button) & Kalite Seçimi:**
    * Web sayfalarında (`YouTube`, `Twitter/X`, `Vimeo`, `Dailymotion`, HTML5 video oynatıcılar vb.) video algılandığında oynatıcının sağ üst köşesinde IDM tarzı şık bir indirme butonu belirir.
@@ -46,7 +46,19 @@ Standart Qt/C++ mimari ve kodlama kurallarına (`m_` üye değişkenleri, `at*` 
 * Ubuntu 20.04 / 22.04 / 24.04
 * Qt 6.x veya Qt 5.15 (`Qt::Core`, `Qt::Gui`, `Qt::Widgets`, `Qt::Network`)
 * `g++` (C++17 desteği)
-* `yt-dlp` (Video indirme desteği için)
+* `yt-dlp` (Video indirme desteği için; güncel sürüm önerilir) ve `ffmpeg` (video ile sesi birleştirmek için)
+
+```bash
+sudo apt update
+sudo apt install -y build-essential qt6-base-dev qt6-base-dev-tools ffmpeg
+
+# Güncel yt-dlp (apt deposundaki sürüm eski kalabilir)
+sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+sudo chmod a+rx /usr/local/bin/yt-dlp
+# Alternatif: pip install -U yt-dlp
+```
+
+> `ffmpeg` yoksa birleştirme gerektiren medya indirmeleri başarısız olabilir; uygulama durum çubuğunda **"Uyarı: ffmpeg yok"** gösterir.
 
 ### Derleme Adımları
 ```bash
@@ -111,4 +123,20 @@ make -f Makefile.host -j$(nproc)
 | `POST` | `/download` | `{ url, filename, referer, userAgent, cookieHeader, cookies, kind, quality, segments }` |
 | `POST` | `/action` | `{ id, action: "pause" \| "resume" \| "cancel" \| "remove" }` |
 
-*Köprü, token tabanlı kimlik doğrulama (`X-HBDM-Token`) ve tarayıcı eklentisi için HMAC challenge-response protokolü ile korunur.*
+*Köprü, imzalı isteklerle ve porta bağlı bir ping kanıtıyla korunur. Token (`~/.config/hb-download-manager/bridge-token`, `0600`) hiçbir zaman gönderilmez:*
+
+* `GET /ping` dışındaki her istek `X-HBDM-Ts` (Unix saniyesi), `X-HBDM-Nonce` (32 küçük harfli hex) ve `X-HBDM-Sig` başlıklarını taşır. `X-HBDM-Sig = hex(HMAC-SHA256(token, "hbdm-req:v1\n" + METOT + "\n" + yol + "\n" + ts + "\n" + nonce + "\n" + hex(SHA-256(gövde))))`.
+* Sunucu 30 saniyeden fazla sapan zamanı ve son 120 saniyede görülmüş `nonce`'u reddeder. Eski `X-HBDM-Token` başlığı kabul edilmez.
+* `/ping?nonce=<32 hex>` yalnızca geçerli `nonce` için `proof = hex(HMAC-SHA256(token, "hbdm-ping:v1:" + port + ":" + nonce))` döner; kanıt dinlenen porta bağlıdır.
+
+### Testler
+
+```bash
+./run_tests.sh      # qmake ile derler, tüm testleri çalıştırır, eksik/başarısız testte sıfırdan farklı kodla çıkar
+```
+
+CMake için: `ctest --test-dir build --output-on-failure`. CI: `.github/workflows/ci.yml`.
+
+### Diller
+
+Kaynak dil Türkçedir; İngilizce katalog `translations/hbdm_en.ts` içindedir ve yalnızca sistemin ilk arayüz dili Türkçe değilse yüklenir.

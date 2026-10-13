@@ -7,6 +7,8 @@ qrc_*
 ui_*
 Makefile*
 .qmake.stash
+.qm/
+qmake_qmake_qm_files.qrc
 
 # CMake Artifacts
 CMakeCache.txt
@@ -40,3 +42,8 @@ build_host_obj/
 .DS_Store
 .directory
 *~
+
+# Secrets and packaged extensions
+*.pem
+*.key
+*.crx

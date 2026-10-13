@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt 6 and build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build python3 nodejs \
+            qt6-base-dev qt6-tools-dev qt6-tools-dev-tools qt6-l10n-tools \
+            libgl-dev libxkbcommon-dev libvulkan-dev
+
+      - name: Version consistency (VERSION, manifest.json, Info.plist)
+        run: bash scripts/check_version.sh
+
+      - name: Shell script syntax
+        run: bash -n run_tests.sh scripts/check_version.sh
+
+      - name: Extension JavaScript syntax
+        run: |
+          set -e
+          for f in extension/*.js; do
+            echo "node --check $f"
+            node --check "$f"
+          done
+
+      - name: Test server self-test
+        run: python3 tests/test_server.py --self-test
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Run tests (ctest)
+        run: ctest --test-dir build --output-on-failure --timeout 900

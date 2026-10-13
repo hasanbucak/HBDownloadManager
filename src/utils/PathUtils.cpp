@@ -1,6 +1,17 @@
 #include "PathUtils.h"
 #include <QRegularExpression>
 
+namespace {
+// Removes n characters from the end without leaving half of a surrogate pair behind
+QString chopSafe(QString s, int n) {
+    s.chop(n);
+    if (!s.isEmpty() && s.at(s.size() - 1).isHighSurrogate()) {
+        s.chop(1);
+    }
+    return s;
+}
+}
+
 QString PathUtils::sanitizeFileName(const QString &raw) {
     // D7: Do not percent-decode here (RFC 5987 branch already decodes in header parser)
     QString name = raw;
@@ -34,7 +45,7 @@ QString PathUtils::sanitizeFileName(const QString &raw) {
     while (out.toUtf8().size() > 240) {
         const int dot = out.lastIndexOf(QLatin1Char('.'));
         const QString ext = (dot > 0 && out.size() - dot <= 10) ? out.mid(dot) : QString();
-        out = out.left(out.size() - ext.size() - 1) + ext;
+        out = chopSafe(out.left(out.size() - ext.size()), 1) + ext;
     }
 
     if (out.isEmpty()) {
@@ -67,15 +78,15 @@ QString PathUtils::safeJoin(const QString &dir, const QString &name) {
 QString PathUtils::uniqueTargetPath(const QString &baseDir, const QString &fileName, const QString &id) {
     const QString cleanName = sanitizeFileName(fileName);
     const QFileInfo info(cleanName);
-    QString stem = info.completeBaseName();
-    stem.remove(QRegularExpression(QStringLiteral("\\s\\(\\d+\\)$")));
+    // Keep the stem as it is: "Movie (2019).mkv" must stay "Movie (2019).mkv"
+    const QString stem = info.completeBaseName();
     const QString ext = info.suffix().isEmpty() ? QString() : QLatin1Char('.') + info.suffix();
 
     for (int n = 0; n < 10000; ++n) {
         const QString tag = (n == 0) ? QString() : QStringLiteral(" (%1)").arg(n);
         QString s = stem;
         while (!s.isEmpty() && (s + tag + ext).toUtf8().size() > 240) {
-            s.chop(1);
+            s = chopSafe(s, 1);
         }
         const QString path = QDir(baseDir).filePath(s + tag + ext);
         const QFileInfo fi(path);
@@ -84,4 +95,20 @@ QString PathUtils::uniqueTargetPath(const QString &baseDir, const QString &fileN
         }
     }
     return QDir(baseDir).filePath(QStringLiteral("download-%1%2").arg(id.isEmpty() ? QStringLiteral("file") : id, ext));
+}
+
+bool PathUtils::isInsideDir(const QString &path, const QString &dir) {
+    if (path.isEmpty() || dir.isEmpty()) {
+        return false;
+    }
+    const QString base = QDir(dir).canonicalPath();
+    if (base.isEmpty()) {
+        return false;
+    }
+    // Resolve the parent, not the file: a symlinked file is judged by where the link itself lives
+    const QString parent = QFileInfo(QFileInfo(path).absolutePath()).canonicalFilePath();
+    if (parent.isEmpty()) {
+        return false;
+    }
+    return parent == base || parent.startsWith(base + QLatin1Char('/'));
 }

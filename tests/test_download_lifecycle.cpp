@@ -10,6 +10,7 @@
 #include <QStandardPaths>
 #include "DownloadManager.h"
 #include "DownloadItem.h"
+#include "test_guard.h"
 
 class TestDownloadLifecycle : public QObject {
     Q_OBJECT
@@ -23,14 +24,17 @@ private slots:
     void testCookieClearingOnCompletionAndFailure();
     void testShutdownLifecycle();
     void testCancelCompletedItemLeavesItCompleted();
-    void testSafeFileRemovalPausedItemKeepsPart();
+    void testRemovePausedItemDeletesPart();
     void testSafeFileRemovalCancelledItemDeletesPart();
+    void testRemoveErrorItemDeletesPart();
+    void testCompletedFinalFileOutsideFolderIsKept();
+    void testRemoveCompletedWithoutDeleteFileKeepsFinalFile();
 };
 
 void TestDownloadLifecycle::initTestCase() {
-    QStandardPaths::setTestModeEnabled(true);
-    QString configDir = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation) + "/hb-download-manager";
-    QVERIFY2(!configDir.startsWith(QDir::homePath() + "/.config/"), "Safety assertion failed: test mode not isolating config path!");
+    // Must run before the DownloadManager singleton (and its QSettings / downloads.json) is touched
+    QString why;
+    QVERIFY2(TestGuard::enterSandbox(&why), qPrintable(why));
     QVERIFY(QCoreApplication::instance() != NULL);
 }
 
@@ -264,13 +268,13 @@ void TestDownloadLifecycle::testCancelCompletedItemLeavesItCompleted() {
     dm.removeDownload(item.m_id, false);
 }
 
-void TestDownloadLifecycle::testSafeFileRemovalPausedItemKeepsPart() {
+void TestDownloadLifecycle::testRemovePausedItemDeletesPart() {
     QTemporaryDir tempDir;
     QVERIFY(tempDir.isValid());
     DownloadManager &dm = DownloadManager::instance();
 
     DownloadItem item;
-    item.m_id = "paused-keep-part-id";
+    item.m_id = "paused-delete-part-id";
     item.m_fileName = "paused.zip";
     item.m_directory = tempDir.path();
     item.m_state = DownloadStatePaused;
@@ -279,20 +283,19 @@ void TestDownloadLifecycle::testSafeFileRemovalPausedItemKeepsPart() {
     {
         QFile partFile(partPath);
         QVERIFY(partFile.open(QIODevice::WriteOnly));
-        partFile.write("VALUABLE RESUMABLE DATA");
+        partFile.write("RESUMABLE DATA OF AN ITEM THAT IS ABOUT TO LEAVE THE LIST");
         partFile.close();
     }
     QVERIFY(QFile::exists(partPath));
 
     dm.addDownload(item, false);
 
-    // D1: removeDownload with deleteFile = false keeps .part for Paused item
+    // E10: once the item leaves the list nothing can resume or clean its .part, so it is always
+    // removed, whatever the state and whatever deleteFile says
     dm.removeDownload(item.m_id, false);
 
-    QVERIFY(QFile::exists(partPath));
-
-    // Clean up part file
-    QFile::remove(partPath);
+    QVERIFY(dm.findItem(item.m_id) == NULL);
+    QVERIFY(!QFile::exists(partPath));
 }
 
 void TestDownloadLifecycle::testSafeFileRemovalCancelledItemDeletesPart() {
@@ -318,11 +321,96 @@ void TestDownloadLifecycle::testSafeFileRemovalCancelledItemDeletesPart() {
     dm.addDownload(item, false);
     dm.findItem(item.m_id)->m_state = DownloadStateCancelled;
 
-    // D1: removeDownload on a Cancelled item deletes .part without asking even if deleteFile = false
+    // removeDownload on a Cancelled item deletes .part even if deleteFile = false
     dm.removeDownload(item.m_id, false);
 
     QVERIFY(!QFile::exists(partPath));
 }
+
+void TestDownloadLifecycle::testRemoveErrorItemDeletesPart() {
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    DownloadManager &dm = DownloadManager::instance();
+
+    DownloadItem item;
+    item.m_id = "error-delete-part-id";
+    item.m_fileName = "broken.zip";
+    item.m_directory = tempDir.path();
+    dm.addDownload(item, false);
+    DownloadItem *added = dm.findItem(item.m_id);
+    QVERIFY(added != NULL);
+    added->m_state = DownloadStateError;
+
+    const QString partPath = item.partFilePath();
+    {
+        QFile partFile(partPath);
+        QVERIFY(partFile.open(QIODevice::WriteOnly));
+        partFile.write("PART OF A FAILED DOWNLOAD");
+        partFile.close();
+    }
+
+    dm.removeDownload(item.m_id, true);
+    QVERIFY(!QFile::exists(partPath));
+    QVERIFY(dm.findItem(item.m_id) == NULL);
+}
+
+void TestDownloadLifecycle::testCompletedFinalFileOutsideFolderIsKept() {
+    // E11: a stored final path that is not inside the item's own folder is never deleted
+    QTemporaryDir itemDir;
+    QTemporaryDir otherDir;
+    QVERIFY(itemDir.isValid());
+    QVERIFY(otherDir.isValid());
+
+    const QString outsidePath = otherDir.filePath("must_survive.bin");
+    {
+        QFile f(outsidePath);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("NOT YOURS TO DELETE");
+        f.close();
+    }
+
+    DownloadManager &dm = DownloadManager::instance();
+    DownloadItem item;
+    item.m_id = "completed-outside-id";
+    item.m_fileName = "must_survive.bin";
+    item.m_directory = itemDir.path();
+    item.m_finalPath = outsidePath;
+    dm.addDownload(item, false);
+    dm.findItem(item.m_id)->m_state = DownloadStateCompleted;
+
+    dm.removeDownload(item.m_id, true);
+
+    QVERIFY(dm.findItem(item.m_id) == NULL);
+    QVERIFY2(QFile::exists(outsidePath), "a file outside the item's folder must not be deleted");
+}
+
+void TestDownloadLifecycle::testRemoveCompletedWithoutDeleteFileKeepsFinalFile() {
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    const QString finalPath = tempDir.filePath("keep_me.zip");
+    {
+        QFile f(finalPath);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("COMPLETED DATA");
+        f.close();
+    }
+
+    DownloadManager &dm = DownloadManager::instance();
+    DownloadItem item;
+    item.m_id = "completed-keep-id";
+    item.m_fileName = "keep_me.zip";
+    item.m_directory = tempDir.path();
+    item.m_finalPath = finalPath;
+    dm.addDownload(item, false);
+    dm.findItem(item.m_id)->m_state = DownloadStateCompleted;
+
+    dm.removeDownload(item.m_id, false);
+    QVERIFY(QFile::exists(finalPath));
+}
+
+// DownloadManager::cleanupOrphanParts() (sweeps .dm-<id>.part files of unknown ids older than 24 h in
+// the folders of loaded items) runs only inside the singleton's constructor, which cannot be
+// re-run in one process; there is no test for it here.
 
 QTEST_MAIN(TestDownloadLifecycle)
 #include "test_download_lifecycle.moc"

@@ -22,6 +22,7 @@ static bool installNativeHostManifests(const QString &hostBinaryPath) {
 
     QJsonArray origins;
     origins.append("chrome-extension://fmlcahmlpfmfnnemigpbbbnmkikepjko/");
+    origins.append("chrome-extension://afdfemednfkkmmbpliapapodafgbbeme/");
     chromeManifest["allowed_origins"] = origins;
 
     QByteArray chromeJson = QJsonDocument(chromeManifest).toJson(QJsonDocument::Indented);
@@ -152,7 +153,13 @@ int main(int argc, char *argv[]) {
         }
 
         QJsonDocument doc = QJsonDocument::fromJson(buffer);
-        if (!doc.isObject()) continue;
+        if (!doc.isObject()) {
+            QJsonObject err;
+            err["ok"] = false;
+            err["error"] = "invalid message";
+            sendNativeMessage(err);
+            continue;
+        }
 
         QJsonObject msg = doc.object();
         QString action = msg["action"].toString();

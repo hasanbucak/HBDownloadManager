@@ -570,7 +570,7 @@
       menu.classList.remove('hbdm-open');
       host.classList.remove('hbdm-menu-open');
       const url = getCanonicalVideoUrl(video);
-      setSuccessState(kind === 'audio' ? '✓ Ses İndiriliyor...' : '✓ İndirmeye Gönderildi!');
+      mainBtn.querySelector('.hbdm-text').textContent = '⏳ Gönderiliyor...';
       send({
         type: 'download',
         url: url,
@@ -579,6 +579,13 @@
         kind: kind,
         quality: quality || 'best',
         estimatedBytes: estimatedBytes || 0
+      }).then((r) => {
+        if (r && r.ok) {
+          setSuccessState(kind === 'audio' ? '✓ Ses İndiriliyor...' : '✓ İndirmeye Gönderildi!');
+        } else {
+          const errMsg = (r && r.error) ? r.error : 'Bağlantı hatası';
+          setSuccessState('⚠️ ' + errMsg);
+        }
       });
     }
 

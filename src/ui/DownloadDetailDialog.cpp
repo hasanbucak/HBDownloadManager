@@ -145,7 +145,8 @@ void DownloadDetailDialog::updateUiWithItem(const DownloadItem &item) {
 
     // Segment Çubuklarını ve Tablosunu Güncelle
     int segCount = item.m_segments.size();
-    if (segCount > 0) {
+    {
+        // Always runs: when the count drops to 0 the old bars and rows must go too
         QHBoxLayout *barsHBox = qobject_cast<QHBoxLayout*>(m_segmentBarsContainer->layout());
 
         while (m_segmentBars.size() < segCount) {

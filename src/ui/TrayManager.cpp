@@ -1,3 +1,4 @@
+#include <QCoreApplication>
 #include "TrayManager.h"
 #include "MainWindow.h"
 #include "NewDownloadDialog.h"
@@ -35,7 +36,11 @@ TrayManager::TrayManager(MainWindow *mainWindow, QObject *parent)
 }
 
 TrayManager::~TrayManager() {
+    // The tray icon still points to the menu: detach it before deleting
+    m_trayIcon->hide();
+    m_trayIcon->setContextMenu(NULL);
     delete m_menu;
+    m_menu = NULL;
 }
 
 void TrayManager::setupMenu() {
@@ -75,9 +80,8 @@ void TrayManager::onShowHideClicked() {
 }
 
 void TrayManager::onNewDownloadClicked() {
-    NewDownloadDialog dlg(QUrl(), m_mainWindow);
-    if (dlg.exec() == QDialog::Accepted) {
-        DownloadManager::instance().addDownload(dlg.downloadItem(), dlg.shouldStartImmediately());
+    if (m_mainWindow != NULL) {
+        m_mainWindow->requestNewDownload();
     }
 }
 
@@ -88,7 +92,7 @@ void TrayManager::onPauseAllClicked() {
 void TrayManager::onResumeAllClicked() {
     const QList<DownloadItem> &list = DownloadManager::instance().items();
     for (int i = 0; i < list.size(); ++i) {
-        if (list.at(i).m_state == DownloadStatePaused) {
+        if (list.at(i).m_state == DownloadStatePaused || list.at(i).m_state == DownloadStateError) {
             DownloadManager::instance().resumeDownload(list.at(i).m_id);
         }
     }
@@ -107,7 +111,8 @@ void TrayManager::onQuitClicked() {
         }
     }
     DownloadManager::instance().pauseAll();
-    QApplication::quit();
+    QCoreApplication::instance()->setProperty("hbdmQuitting", true);
+    QCoreApplication::exit(0);  // quit() may be refused by closeEvent in Qt 6
 }
 
 void TrayManager::onItemCompleted(const DownloadItem &item) {

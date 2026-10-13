@@ -28,6 +28,8 @@ private slots:
 
 private:
     void setupUi();
+    // URL, folder (created if missing, must be writable), free space and "file exists" checks
+    bool validateInputs();
 
     QLineEdit *m_urlEdit;
     QLineEdit *m_fileNameEdit;

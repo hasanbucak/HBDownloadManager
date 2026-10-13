@@ -10,6 +10,9 @@
 #include <QLabel>
 #include <QGroupBox>
 #include <QMessageBox>
+#include <QStorageInfo>
+#include <QDir>
+#include <QFile>
 
 NewDownloadDialog::NewDownloadDialog(const QUrl &url, QWidget *parent)
     : QDialog(parent),
@@ -146,10 +149,75 @@ DownloadItem NewDownloadDialog::downloadItem() const {
     return item;
 }
 
-void NewDownloadDialog::onStartClicked() {
+bool NewDownloadDialog::validateInputs() {
     QUrl url(m_urlEdit->text().trimmed());
     if (!url.isValid() || (url.scheme() != "http" && url.scheme() != "https") || url.host().isEmpty()) {
         QMessageBox::warning(this, tr("Geçersiz Bağlantı"), tr("Lütfen geçerli bir http veya https bağlantısı girin."));
+        return false;
+    }
+
+    const QString dir = m_directoryEdit->text().trimmed();
+    if (dir.isEmpty()) {
+        QMessageBox::warning(this, tr("Geçersiz Klasör"), tr("Lütfen bir kayıt klasörü seçin."));
+        return false;
+    }
+    if (!QDir().mkpath(dir)) {
+        QMessageBox::warning(this, tr("Geçersiz Klasör"), tr("Klasör oluşturulamadı: %1").arg(dir));
+        return false;
+    }
+    if (!QFileInfo(dir).isWritable()) {
+        QMessageBox::warning(this, tr("Geçersiz Klasör"), tr("Bu klasöre yazma izniniz yok: %1").arg(dir));
+        return false;
+    }
+
+    // Free space: the size is unknown before the first request, so only warn when the disk is nearly full
+    const qint64 kLowSpaceBytes = 100LL * 1024 * 1024;
+    QStorageInfo storage(dir);
+    if (storage.isValid() && storage.isReady()) {
+        const qint64 avail = storage.bytesAvailable();
+        if (avail >= 0 && avail < kLowSpaceBytes) {
+            const QString availStr = QString::number(avail / (1024.0 * 1024.0), 'f', 1);
+            QMessageBox::StandardButton r = QMessageBox::warning(
+                this, tr("Disk Alanı Az"),
+                tr("Seçilen konumda yalnızca %1 MB boş alan var. Yine de devam edilsin mi?").arg(availStr),
+                QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
+            if (r != QMessageBox::Yes) {
+                return false;
+            }
+        }
+    }
+
+    // File exists: the engine never overwrites, it saves under the next free name
+    DownloadItem item = downloadItem();
+    const QString wanted = QDir(dir).filePath(item.m_fileName);
+    bool clash = QFileInfo::exists(wanted);
+    if (!clash) {
+        const QList<DownloadItem> &list = DownloadManager::instance().items();
+        for (int i = 0; i < list.size() && !clash; ++i) {
+            const DownloadItem &other = list.at(i);
+            if (other.m_state != DownloadStateCompleted && other.m_state != DownloadStateCancelled &&
+                QDir::cleanPath(other.m_directory) == QDir::cleanPath(dir) && other.m_fileName == item.m_fileName) {
+                clash = true;
+            }
+        }
+    }
+    if (clash) {
+        const QString alt = QFileInfo(PathUtils::uniqueTargetPath(dir, item.m_fileName, item.m_id)).fileName();
+        QMessageBox::StandardButton r = QMessageBox::question(
+            this, tr("Dosya Zaten Var"),
+            tr("\"%1\" adlı bir dosya zaten var veya aynı ada sahip bir indirme sürüyor. "
+               "Mevcut dosya silinmez; yeni indirme \"%2\" adıyla kaydedilebilir. Devam edilsin mi?")
+                .arg(item.m_fileName, alt),
+            QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Yes);
+        if (r != QMessageBox::Yes) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void NewDownloadDialog::onStartClicked() {
+    if (!validateInputs()) {
         return;
     }
 
@@ -160,9 +228,7 @@ void NewDownloadDialog::onStartClicked() {
 }
 
 void NewDownloadDialog::onLaterClicked() {
-    QUrl url(m_urlEdit->text().trimmed());
-    if (!url.isValid() || (url.scheme() != "http" && url.scheme() != "https") || url.host().isEmpty()) {
-        QMessageBox::warning(this, tr("Geçersiz Bağlantı"), tr("Lütfen geçerli bir http veya https bağlantısı girin."));
+    if (!validateInputs()) {
         return;
     }
 

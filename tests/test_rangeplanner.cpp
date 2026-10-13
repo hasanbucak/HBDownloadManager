@@ -1,6 +1,7 @@
 #include <QTest>
 #include <QStandardPaths>
 #include "RangePlanner.h"
+#include "test_guard.h"
 
 class TestRangePlanner : public QObject {
     Q_OBJECT
@@ -19,7 +20,8 @@ private:
 };
 
 void TestRangePlanner::initTestCase() {
-    QStandardPaths::setTestModeEnabled(true);
+    QString why;
+    QVERIFY2(TestGuard::enterSandbox(&why), qPrintable(why));
 }
 
 void TestRangePlanner::verifyExactCoverage(qint64 totalBytes, int requestedSegments) {

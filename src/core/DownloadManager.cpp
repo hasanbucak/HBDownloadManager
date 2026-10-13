@@ -1,5 +1,6 @@
 #include "DownloadManager.h"
 #include "MediaHosts.h"
+#include "PathUtils.h"
 #include <QDir>
 #include <QFile>
 #include <QSaveFile>
@@ -12,7 +13,26 @@
 #include <QCoreApplication>
 #include <QSettings>
 #include <QDebug>
+#include <QSet>
+#include <QRegularExpression>
 #include <sys/stat.h>
+
+namespace {
+// Engine-owned fields: the downloader is the source of truth for these while it runs
+void copyEngineState(DownloadItem &dst, const DownloadItem &src) {
+    dst.m_segments = src.m_segments;
+    dst.m_receivedBytes = src.m_receivedBytes;
+    dst.m_totalBytes = src.m_totalBytes;
+    dst.m_supportsRanges = src.m_supportsRanges;
+    dst.m_etag = src.m_etag;
+    if (src.m_url.isValid() && !src.m_url.isEmpty()) {
+        dst.m_url = src.m_url;
+    }
+    if (!src.m_fileName.isEmpty()) {
+        dst.m_fileName = src.m_fileName;
+    }
+}
+}
 
 DownloadManager& DownloadManager::instance() {
     static DownloadManager s_instance;
@@ -44,6 +64,7 @@ DownloadManager::DownloadManager(QObject *parent)
 
     loadState();
     initialize();
+    cleanupOrphanParts();
 }
 
 DownloadManager::~DownloadManager() {
@@ -124,8 +145,11 @@ void DownloadManager::stopDownloader(const QString &id, bool immediateDelete) {
     if (m_activeSegmented.contains(id)) {
         SegmentedDownloader *downloader = m_activeSegmented.take(id);
         downloader->disconnect(this);
-        downloader->syncToDisk();
-        downloader->pause();
+        downloader->pause();  // closes the part file with fdatasync: counters are durable now
+        DownloadItem *item = findItem(id);
+        if (item != NULL) {
+            copyEngineState(*item, downloader->durableItem());
+        }
         if (immediateDelete) {
             delete downloader;
         } else {
@@ -224,6 +248,13 @@ void DownloadManager::shutdown() {
         m_saveTimer->stop();
     }
 
+    // Signal every yt-dlp process group first, so the waits below overlap instead of adding up
+    for (QMap<QString, VideoDownloader*>::iterator it = m_activeVideo.begin(); it != m_activeVideo.end(); ++it) {
+        if (it.value() != NULL) {
+            it.value()->requestStop();
+        }
+    }
+
     pauseAll(true);
     saveState();
 
@@ -274,8 +305,8 @@ void DownloadManager::removeDownload(const QString &id, bool deleteFile) {
 
     // F7: Read item state BEFORE stopping downloader (do not turn Completed into Paused)
     const bool wasCompleted = (found->m_state == DownloadStateCompleted);
-    const bool wasCancelled = (found->m_state == DownloadStateCancelled);
     const QString finalPath = found->m_finalPath;
+    const QString directory = found->m_directory;
     const QString partPath = found->partFilePath();
 
     stopDownloader(id);
@@ -287,17 +318,15 @@ void DownloadManager::removeDownload(const QString &id, bool deleteFile) {
         }
     }
 
-    // D1: Delete the .part without asking only for Cancelled items, or if deleteFile is explicitly requested.
-    // Keep .part intact for Paused and Error items if deleteFile is false.
-    if (wasCancelled || deleteFile) {
-        if (QFile::exists(partPath)) {
-            QFile::remove(partPath);
-        }
+    // Once the item leaves the list nothing can resume it, so its .part is always removed.
+    // The UI asks before removing a non-completed item.
+    if (QFile::exists(partPath)) {
+        QFile::remove(partPath);
     }
 
-    // If deleteFile is true, ONLY remove finalPath if Completed and !finalPath.isEmpty()
-    // Never delete targetFilePath() of an incomplete download!
-    if (deleteFile && wasCompleted && !finalPath.isEmpty()) {
+    // The final file only when explicitly asked, only for a Completed item, and only inside its folder
+    if (deleteFile && wasCompleted && !finalPath.isEmpty()
+        && PathUtils::isInsideDir(finalPath, directory)) {
         if (QFile::exists(finalPath)) {
             QFile::remove(finalPath);
         }
@@ -370,6 +399,7 @@ void DownloadManager::onSegmentedProbed(const ProbeResult &res) {
         it->m_state = DownloadStateDownloading;
         it->m_totalBytes = res.m_totalBytes;
         it->m_supportsRanges = res.m_supportsRanges;
+        it->m_etag = res.m_etag;
         if (!res.m_suggestedFileName.isEmpty()) {
             it->m_fileName = res.m_suggestedFileName;
         }
@@ -556,7 +586,16 @@ QString DownloadManager::configFilePath() const {
 void DownloadManager::saveState() {
     QJsonArray array;
     for (int i = 0; i < m_items.size(); ++i) {
-        array.append(m_items.at(i).toJson());
+        const DownloadItem &item = m_items.at(i);
+        SegmentedDownloader *dl = m_activeSegmented.value(item.m_id, NULL);
+        if (dl != NULL) {
+            // Persist only counters whose bytes are known to be on disk
+            DownloadItem durable = item;
+            copyEngineState(durable, dl->durableItem());
+            array.append(durable.toJson());
+        } else {
+            array.append(item.toJson());
+        }
     }
 
     QJsonDocument doc(array);
@@ -576,6 +615,20 @@ void DownloadManager::saveState() {
 
 void DownloadManager::loadState() {
     QString path = configFilePath();
+
+    // D7: drop corrupt state copies older than 7 days (they may contain session cookies)
+    {
+        QDir cfgDir(QFileInfo(path).absolutePath());
+        const QStringList oldCorrupt = cfgDir.entryList(QStringList() << "downloads.json.corrupt-*", QDir::Files);
+        const QDateTime now = QDateTime::currentDateTime();
+        for (int i = 0; i < oldCorrupt.size(); ++i) {
+            QFileInfo cInfo(cfgDir.filePath(oldCorrupt.at(i)));
+            if (cInfo.lastModified().daysTo(now) > 7) {
+                cfgDir.remove(oldCorrupt.at(i));
+            }
+        }
+    }
+
     QFile file(path);
     if (!file.exists()) return;
     if (!file.open(QIODevice::ReadOnly)) return;
@@ -589,17 +642,6 @@ void DownloadManager::loadState() {
     QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
     if (parseError.error != QJsonParseError::NoError || !doc.isArray()) {
         qWarning() << "Failed to parse state file:" << parseError.errorString();
-
-        // D7: Clean up corrupt state files older than 7 days
-        QDir cfgDir(QFileInfo(path).absolutePath());
-        QStringList oldCorrupt = cfgDir.entryList(QStringList() << "downloads.json.corrupt-*", QDir::Files);
-        QDateTime now = QDateTime::currentDateTime();
-        for (int i = 0; i < oldCorrupt.size(); ++i) {
-            QFileInfo cInfo(cfgDir.filePath(oldCorrupt.at(i)));
-            if (cInfo.lastModified().daysTo(now) > 7) {
-                cfgDir.remove(oldCorrupt.at(i));
-            }
-        }
 
         QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd-hhmmss");
         QString corruptPath = QString("%1.corrupt-%2").arg(path, timestamp);
@@ -615,6 +657,35 @@ void DownloadManager::loadState() {
     QJsonArray array = doc.array();
     for (int i = 0; i < array.size(); ++i) {
         m_items.append(DownloadItem::fromJson(array.at(i).toObject()));
+    }
+}
+
+void DownloadManager::cleanupOrphanParts() {
+    // Hidden ".dm-<id>.part" files whose item is no longer in the list can never be resumed
+    // Only folders that loaded items point to (never a blanket sweep of the default folder: a test
+    // process or a fresh profile must not touch parts it does not know), and only files older than a day.
+    QSet<QString> knownIds;
+    QSet<QString> dirs;
+    for (int i = 0; i < m_items.size(); ++i) {
+        knownIds.insert(m_items.at(i).m_id);
+        if (!m_items.at(i).m_directory.isEmpty()) {
+            dirs.insert(m_items.at(i).m_directory);
+        }
+    }
+
+    static const QRegularExpression partRegex(QStringLiteral("^\\.dm-([A-Za-z0-9_-]{1,64})\\.part$"));
+    for (QSet<QString>::const_iterator dIt = dirs.constBegin(); dIt != dirs.constEnd(); ++dIt) {
+        QDir dir(*dIt);
+        if (dir.path().isEmpty() || !dir.exists()) continue;
+        const QStringList parts = dir.entryList(QStringList() << ".dm-*.part", QDir::Files | QDir::Hidden);
+        for (int i = 0; i < parts.size(); ++i) {
+            const QRegularExpressionMatch m = partRegex.match(parts.at(i));
+            const QFileInfo info(dir.filePath(parts.at(i)));
+            if (m.hasMatch() && !knownIds.contains(m.captured(1))
+                && info.lastModified().secsTo(QDateTime::currentDateTime()) > 24 * 3600) {
+                dir.remove(parts.at(i));
+            }
+        }
     }
 }
 

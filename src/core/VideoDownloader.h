@@ -15,12 +15,17 @@ public:
     void start();
     void pause();
     void cancel();
+    // Sends SIGTERM to the yt-dlp process group without waiting (pause()/cancel() then wait)
+    void requestStop();
 
     static QString findYtDlp();
     static QString findFfmpeg();
     static QString findNode();
     static bool isAvailable();
-    static QString ytDlpVersion();
+    // Cached version; blocks (up to 2 s) only when allowBlocking and the async probe has not finished
+    static QString ytDlpVersion(bool allowBlocking = false);
+    // Starts the asynchronous "yt-dlp --version" probe (call once at start-up)
+    static void prefetchYtDlpVersion();
     static bool isFfmpegAvailable();
 
 signals:
@@ -35,6 +40,8 @@ private slots:
 private:
     void parseOutputLine(const QString &line);
     QString createCookieFile();
+    void signalProcessGroup(int sig);
+    void stopProcess(bool cancelled);
 
     DownloadItem m_item;
     QProcess *m_process;
@@ -46,4 +53,6 @@ private:
     qint64 m_audioTotalBytes;
     bool m_isAudioPhase;
     QStringList m_recentOutputLines;
+    QString m_fileMarker;
+    bool m_stopRequested;
 };

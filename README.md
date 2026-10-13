@@ -115,6 +115,8 @@ sudo chmod a+rx /usr/local/bin/yt-dlp
 # Alternatif: pip install -U yt-dlp
 ```
 
+> `ffmpeg` yoksa video ve ses akışlarını birleştirmesi gereken medya indirmeleri başarısız olabilir. Uygulama bu durumda durum çubuğunda **"Uyarı: ffmpeg yok"** gösterir.
+
 ### Derleme (Build)
 
 #### Seçenek 1: QMake ile Derleme (Önerilen)
@@ -187,16 +189,52 @@ make -j$(nproc)
 
 ## 📡 REST Köprüsü API Belirtimi (`127.0.0.1:48213`)
 
-Köprü, yalnızca yerel makineden (`127.0.0.1`) gelen istekleri kabul eder. Güvenlik için token tabanlı yetkilendirme ve HMAC sınama-yanıt mekanizması kullanılır:
-* **Kimlik Doğrulama:** REST isteklerinde `X-HBDM-Token: <token>` başlığı zorunludur. Token, `~/.config/hb-download-manager/token` dosyasında `0600` izinleriyle saklanır.
-* **HMAC Sınama-Yanıt (Challenge-Response):** Eklenti, `/ping?nonce=<rastgele>` çağrısıyla tek kullanımlık bir sınama gönderir. Yerel sunucu `HMAC-SHA256("hbdm-ping:" + nonce, token)` yanıtını döner. Eklenti doğrulamadan sonra hiçbir oturum çerezi veya token göndermez.
+Köprü, yalnızca yerel makineden (`127.0.0.1`) gelen istekleri kabul eder. Güvenlik için imzalı istekler ve porta bağlı bir sınama-yanıt (challenge-response) mekanizması kullanılır. Token ağ üzerinden hiçbir zaman gönderilmez:
+* **Token:** `~/.config/hb-download-manager/bridge-token` dosyasında `0600` izinleriyle saklanır (64 küçük harfli onaltılık karakter). Dosyayı yalnızca uygulama ve native host okur; eklenti token'ı native host üzerinden alır.
+* **İmzalı İstekler:** `GET /ping` dışındaki her istek üç başlık taşır:
+  * `X-HBDM-Ts`: Unix zamanı (saniye)
+  * `X-HBDM-Nonce`: 32 küçük harfli onaltılık karakter (16 rastgele bayt)
+  * `X-HBDM-Sig`: `hex(HMAC-SHA256(token, "hbdm-req:v1\n" + METOT + "\n" + yol + "\n" + ts + "\n" + nonce + "\n" + hex(SHA-256(gövde))))`
+
+  `yol`, istekte gönderildiği haliyle (sorgu dizesi dahil) yazılır. Sunucu, zamanı 30 saniyeden fazla sapan istekleri ve son 120 saniyede görülmüş bir `nonce`'u reddeder; imza sabit zamanlı karşılaştırılır. Eski `X-HBDM-Token` başlığı artık kabul edilmez.
+* **Porta Bağlı Ping Kanıtı:** Eklenti `/ping?nonce=<32 hex>` çağırır. Yalnızca `nonce` tam olarak `^[0-9a-f]{32}$` ise sunucu `proof = hex(HMAC-SHA256(token, "hbdm-ping:v1:" + dinlenen_port + ":" + nonce))` döner. Kanıt porta bağlı olduğundan başka bir portta dinleyen sahte bir süreç onu aktaramaz. Token alınamıyorsa eklenti uygulamayı çevrimdışı sayar ve tarayıcı indirmeyi kendisi sürdürür.
 
 | Metot | Uç Nokta | Açıklama |
 |---|---|---|
 | `GET` | `/ping` | Servis durumu, sürüm, yt-dlp/ffmpeg varlığı, aktif indirmeler ve HMAC kanıtı |
-| `GET` | `/downloads` | Son 50 indirmenin durum, hız, yüzde ve boyut bilgileri (Token zorunlu) |
-| `POST` | `/download` | Yeni indirme başlatır (`url`, `filename`, `cookies`, `kind`, `quality`, vb.) (Token zorunlu) |
-| `POST` | `/action` | İndirmeyi yönetir (`id`, `action: "pause" \| "resume" \| "cancel" \| "remove"`) (Token zorunlu) |
+| `GET` | `/downloads` | Son 50 indirmenin durum, hız, yüzde ve boyut bilgileri (İmza zorunlu) |
+| `POST` | `/download` | Yeni indirme başlatır (`url`, `filename`, `cookies`, `kind`, `quality`, vb.) (İmza zorunlu) |
+| `POST` | `/action` | İndirmeyi yönetir (`id`, `action: "pause" \| "resume" \| "cancel" \| "remove"`) (İmza zorunlu) |
+
+---
+
+## 💾 Durum Kaydı (Süreklilik)
+
+İlerleme anlık değil, **düzenli aralıklarla** kalıcı hale getirilir: etkin indirmelerin parça dosyası her 5 saniyede bir `fdatasync` ile diske yazılır ve ancak ondan sonra `downloads.json` içine kaydedilen sayaçlar güncellenir. Duraklatma ve uygulamadan çıkış sırasında da aynı işlem yapılır. Böylece JSON, diskteki veriden hiçbir zaman ileride olmaz. Beklenmedik bir çökmede en fazla son birkaç saniyelik veri yeniden indirilir.
+
+---
+
+## 🧪 Testler
+
+```bash
+./run_tests.sh
+```
+
+Betik, `tests/` altında `qmake` (`qmake6` veya PATH'teki `qmake`; `QMAKE=/yol/qmake` ile değiştirilebilir) ile tüm test ikililerini derler ve **hepsini** çalıştırır. Eksik bir ikili veya başarısız bir test çıkış kodunu sıfırdan farklı yapar; "ALL TESTS PASSED" yalnızca her şey geçtiğinde yazılır. Ayrıca `tests/test_server.py --self-test`, eklenti dosyalarında `node --check` ve `scripts/check_version.sh` çalıştırılır, gerçek `downloads.json` ve `bridge-token` dosyalarının değişmediği md5 ile doğrulanır. Testler `HOME` ve `XDG_*` dizinlerini geçici bir klasöre taşır (`tests/test_guard.h`).
+
+CMake ile: `cmake -S . -B build && cmake --build build && ctest --test-dir build --output-on-failure` (her test `QT_QPA_PLATFORM=offscreen` ile kayıtlıdır). GitHub Actions iş akışı `.github/workflows/ci.yml` aynısını yapar.
+
+---
+
+## 🌍 Diller
+
+Kaynak dil **Türkçe**dir: `tr()` metinleri Türkçe yazılır ve Türkçe sistemlerde çeviri yüklenmez. İngilizce katalog `translations/hbdm_en.ts` dosyasındadır; `lrelease` ile derlenip uygulamaya gömülür (`:/i18n/`). Katalog yalnızca sistemin **ilk** arayüz dili Türkçe değilse yüklenir (ikinci dili İngilizce olan bir Türk kullanıcı Türkçe görür). Metinleri değiştirince `lupdate src -ts translations/hbdm_en.ts` ile kataloğu güncelleyin.
+
+---
+
+## 🔢 Sürüm
+
+Tek kaynak `VERSION` dosyasıdır; qmake (`$$cat`) ve CMake (`file(READ)`) bunu `HBDM_VERSION` olarak derlemeye verir. `scripts/check_version.sh`, `extension/manifest.json` ve `safari/Info.plist` ile tutarlılığı denetler.
 
 ---
 

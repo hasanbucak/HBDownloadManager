@@ -7,6 +7,7 @@
 #include <QJsonObject>
 #include <QByteArray>
 #include <QTimer>
+#include <QHash>
 
 class LocalServer : public QObject {
     Q_OBJECT
@@ -49,6 +50,8 @@ private:
     static ParseResult parseHttpRequest(const QByteArray &data, HttpRequest &req);
     static bool isOriginAllowed(const QString &origin, const QMap<QString, QString> &headers);
     bool isHostAllowed(const QString &host) const;
+    bool verifySignedRequest(const HttpRequest &req);
+    quint16 effectivePort() const;
     void ensureToken();
 
     QTcpServer *m_server;
@@ -56,4 +59,5 @@ private:
     QString m_token;
     QMap<QTcpSocket*, QByteArray> m_clientBuffers;
     QMap<QTcpSocket*, QTimer*> m_clientTimers;
+    QHash<QString, qint64> m_seenNonces;  // request nonce -> unix seconds (replay protection)
 };
