@@ -4,15 +4,21 @@
 <context>
     <name>DownloadDetailDialog</name>
     <message>
-        <location filename="../src/ui/DownloadDetailDialog.cpp" line="+21"/>
-        <location line="+116"/>
+        <location filename="../src/ui/DownloadDetailDialog.cpp" line="+22"/>
+        <location line="+122"/>
         <source>Duraklat</source>
         <translation>Pause</translation>
     </message>
     <message>
-        <location line="-115"/>
-        <source>İptal</source>
-        <translation>Cancel</translation>
+        <location line="-121"/>
+        <location line="+194"/>
+        <source>İndirmeyi İptal Et</source>
+        <translation>Cancel Download</translation>
+    </message>
+    <message>
+        <location line="-193"/>
+        <source>Kapat</source>
+        <translation>Close</translation>
     </message>
     <message>
         <location line="+1"/>
@@ -20,7 +26,7 @@
         <translation>Close this window when the download finishes</translation>
     </message>
     <message>
-        <location line="+23"/>
+        <location line="+24"/>
         <source>İndirme Durumu</source>
         <translation>Download Status</translation>
     </message>
@@ -85,7 +91,7 @@
         <translation>Progress</translation>
     </message>
     <message>
-        <location line="+39"/>
+        <location line="+44"/>
         <source>Hız: %1</source>
         <translation>Speed: %1</translation>
     </message>
@@ -99,21 +105,64 @@
         <source>Devam Et</source>
         <translation>Resume</translation>
     </message>
+    <message>
+        <location line="+0"/>
+        <source>Tekrar Dene</source>
+        <translation>Retry</translation>
+    </message>
+    <message>
+        <location line="+70"/>
+        <source>Bu indirme iptal edilsin mi?</source>
+        <translation>Cancel this download?</translation>
+    </message>
+</context>
+<context>
+    <name>DownloadItem</name>
+    <message>
+        <location filename="../src/core/DownloadItem.cpp" line="+134"/>
+        <source>%1 sn</source>
+        <translation>%1 s</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 dk %2 sn</source>
+        <translation>%1 min %2 s</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 sa %2 dk</source>
+        <translation>%1 h %2 min</translation>
+    </message>
 </context>
 <context>
     <name>MainWindow</name>
     <message>
-        <location filename="../src/ui/MainWindow.cpp" line="+85"/>
+        <location filename="../src/ui/MainWindow.cpp" line="+94"/>
+        <source>yt-dlp bulunamadı: video ve medya indirmeleri çalışmaz. yt-dlp paketini kurun.</source>
+        <translation>yt-dlp not found: video and media downloads will not work. Install the yt-dlp package.</translation>
+    </message>
+    <message>
+        <location line="+3"/>
         <source>ffmpeg bulunamadı: video/ses birleştirme gerektiren medya indirmeleri başarısız olabilir. ffmpeg paketini kurun.</source>
         <translation>ffmpeg not found: media downloads that need video/audio merging may fail. Please install the ffmpeg package.</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="+4"/>
+        <source>Uyarı: yt-dlp ve ffmpeg yok</source>
+        <translation>Warning: yt-dlp and ffmpeg missing</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Uyarı: yt-dlp yok</source>
+        <translation>Warning: yt-dlp missing</translation>
+    </message>
+    <message>
+        <location line="+2"/>
         <source>Uyarı: ffmpeg yok</source>
         <translation>Warning: ffmpeg missing</translation>
     </message>
     <message>
-        <location line="+12"/>
+        <location line="+15"/>
         <source>Köprü: 127.0.0.1:%1 (Aktif)</source>
         <translation>Bridge: 127.0.0.1:%1 (Active)</translation>
     </message>
@@ -138,22 +187,42 @@
         <translation>&amp;File</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="+2"/>
         <source>&amp;Yeni İndirme...</source>
         <translation>&amp;New Download...</translation>
     </message>
     <message>
-        <location line="+2"/>
+        <location line="+4"/>
         <source>&amp;Çıkış</source>
         <translation>&amp;Quit</translation>
     </message>
     <message>
         <location line="+4"/>
+        <source>&amp;Yardım</source>
+        <translation>&amp;Help</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>&amp;Hakkında</source>
+        <translation>&amp;About</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Hakkında</source>
+        <translation>About</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>&lt;b&gt;HB Download Manager&lt;/b&gt;&lt;br&gt;Sürüm %1&lt;br&gt;&lt;br&gt;Çok parçalı indirme, yt-dlp ile video indirme ve tarayıcı eklentisi desteği.</source>
+        <translation>&lt;b&gt;HB Download Manager&lt;/b&gt;&lt;br&gt;Version %1&lt;br&gt;&lt;br&gt;Multi-connection downloads, video downloads through yt-dlp and browser extension support.</translation>
+    </message>
+    <message>
+        <location line="+6"/>
         <source>Ana Araç Çubuğu</source>
         <translation>Main Toolbar</translation>
     </message>
     <message>
-        <location line="+4"/>
+        <location line="+5"/>
         <source>Yeni İndirme [+]</source>
         <translation>New Download [+]</translation>
     </message>
@@ -164,11 +233,12 @@
     </message>
     <message>
         <location line="+1"/>
+        <location line="+285"/>
         <source>Devam Et [▶]</source>
         <translation>Resume [▶]</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="-284"/>
         <source>Sil [X]</source>
         <translation>Delete [X]</translation>
     </message>
@@ -267,13 +337,16 @@
         <source>Eklenme Tarihi</source>
         <translation>Date Added</translation>
     </message>
-    <message>
-        <location line="+26"/>
-        <source>0 Aktif İndirme</source>
-        <translation>0 Active Downloads</translation>
+    <message numerus="yes">
+        <location line="+552"/>
+        <source>%n etkin indirme</source>
+        <translation>
+            <numerusform>%n active download</numerusform>
+            <numerusform>%n active downloads</numerusform>
+        </translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="-501"/>
         <source>Toplam Hız: 0 B/s</source>
         <translation>Total Speed: 0 B/s</translation>
     </message>
@@ -283,7 +356,46 @@
         <translation>Bridge: 127.0.0.1:48213 (Active)</translation>
     </message>
     <message>
-        <location line="+167"/>
+        <location line="+143"/>
+        <source>Hata: %1</source>
+        <translation>Error: %1</translation>
+    </message>
+    <message>
+        <location line="+59"/>
+        <source>Tekrar Dene [▶]</source>
+        <translation>Retry [▶]</translation>
+    </message>
+    <message>
+        <location line="+27"/>
+        <source>Bu bağlantı zaten indiriliyor</source>
+        <translation>This link is already downloading</translation>
+    </message>
+    <message>
+        <location line="+28"/>
+        <source>Dosya Bulunamadı</source>
+        <translation>File Not Found</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Dosya artık bu konumda değil (taşınmış veya silinmiş olabilir):
+%1</source>
+        <translation>The file is no longer at this location (it may have been moved or deleted):
+%1</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Klasör Bulunamadı</source>
+        <translation>Folder Not Found</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Klasör artık mevcut değil:
+%1</source>
+        <translation>The folder no longer exists:
+%1</translation>
+    </message>
+    <message>
+        <location line="+22"/>
         <source>İndirmeyi Kaldır</source>
         <translation>Remove Download</translation>
     </message>
@@ -300,12 +412,13 @@
     <message>
         <location line="+3"/>
         <location line="+22"/>
-        <location line="+123"/>
+        <location line="+6"/>
+        <location line="+118"/>
         <source>Listeden Kaldır</source>
         <translation>Remove from List</translation>
     </message>
     <message>
-        <location line="-144"/>
+        <location line="-145"/>
         <source>Dosyayı da Sil</source>
         <translation>Delete File Too</translation>
     </message>
@@ -315,7 +428,12 @@
         <translation>Cancel</translation>
     </message>
     <message>
-        <location line="+21"/>
+        <location line="+20"/>
+        <source>Listeden kaldırılsın mı?</source>
+        <translation>Remove from the list?</translation>
+    </message>
+    <message>
+        <location line="+7"/>
         <source>Kısmen indirilen veri (%1 MB) silinecek. İndirmeyi listeden kaldırmak istediğinizden emin misiniz?</source>
         <translation>The partially downloaded data (%1 MB) will be deleted. Are you sure you want to remove the download from the list?</translation>
     </message>
@@ -325,7 +443,7 @@
         <translation>The download finished while the confirmation box was open; the file was not deleted, it was only removed from the list.</translation>
     </message>
     <message>
-        <location line="+32"/>
+        <location line="+33"/>
         <source>Başarılı</source>
         <translation>Success</translation>
     </message>
@@ -338,41 +456,54 @@ The Chrome, Opera, Firefox, Brave and Edge extensions are now ready.</translatio
     </message>
     <message>
         <location line="+2"/>
+        <location line="+2"/>
+        <location line="+2"/>
+        <location line="+3"/>
         <source>Uyarı</source>
         <translation>Warning</translation>
     </message>
     <message>
-        <location line="+0"/>
+        <location line="-7"/>
+        <source>Native host çalıştırılamadı: %1</source>
+        <translation>Could not run the native host: %1</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Native host kurulum sırasında çöktü.</source>
+        <translation>The native host crashed during installation.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Native host kurulumu başarısız oldu (çıkış kodu %1).</source>
+        <translation>Native host installation failed (exit code %1).</translation>
+    </message>
+    <message>
+        <location line="+3"/>
         <source>Native host ikilisi bulunamadı: %1</source>
         <translation>Native host binary not found: %1</translation>
     </message>
     <message>
-        <location line="+43"/>
+        <location line="+38"/>
         <source>Duraklat</source>
         <translation>Pause</translation>
     </message>
     <message>
-        <location line="+3"/>
-        <source>Devam Et</source>
-        <translation>Resume</translation>
-    </message>
-    <message>
-        <location line="+4"/>
+        <location line="+7"/>
         <source>İndirme Detaylarını Göster</source>
         <translation>Show Download Details</translation>
     </message>
     <message>
-        <location line="+10"/>
+        <location line="+6"/>
         <source>Dosyayı Aç</source>
         <translation>Open File</translation>
     </message>
     <message>
-        <location line="+6"/>
+        <location line="+4"/>
         <source>Klasörde Göster</source>
         <translation>Show in Folder</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="+3"/>
         <source>Bağlantıyı Kopyala</source>
         <translation>Copy Link</translation>
     </message>
@@ -392,24 +523,19 @@ The Chrome, Opera, Firefox, Brave and Edge extensions are now ready.</translatio
         <translation>Are you sure you want to remove this download from the list and delete the downloaded file from your disk completely?</translation>
     </message>
     <message>
-        <location line="+44"/>
-        <source>%1 Aktif İndirme</source>
-        <translation>%1 Active Downloads</translation>
-    </message>
-    <message>
-        <location line="+15"/>
+        <location line="+63"/>
         <source>Toplam Hız: %1</source>
         <translation>Total Speed: %1</translation>
     </message>
     <message>
-        <location line="+41"/>
-        <location line="+30"/>
+        <location line="+43"/>
+        <location line="+33"/>
         <source>Çıkış Onayı</source>
         <translation>Confirm Quit</translation>
     </message>
     <message>
-        <location line="-29"/>
-        <location line="+30"/>
+        <location line="-32"/>
+        <location line="+33"/>
         <source>Aktif indirmeler devam ediyor. Uygulamadan çıkmak istediğinizden emin misiniz?</source>
         <translation>Downloads are still in progress. Are you sure you want to quit the application?</translation>
     </message>
@@ -427,7 +553,12 @@ The Chrome, Opera, Firefox, Brave and Edge extensions are now ready.</translatio
         <translation>Video / Media Stream (yt-dlp)</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="+2"/>
+        <source>Kalite:</source>
+        <translation>Quality:</translation>
+    </message>
+    <message>
+        <location line="+2"/>
         <source>Gözat...</source>
         <translation>Browse...</translation>
     </message>
@@ -447,7 +578,7 @@ The Chrome, Opera, Firefox, Brave and Edge extensions are now ready.</translatio
         <translation>Cancel</translation>
     </message>
     <message>
-        <location line="+43"/>
+        <location line="+61"/>
         <source>Yeni İndirme Başlat</source>
         <translation>Start New Download</translation>
     </message>
@@ -467,7 +598,17 @@ The Chrome, Opera, Firefox, Brave and Edge extensions are now ready.</translatio
         <translation>Save To:</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+5"/>
+        <source>8 (Önerilen)</source>
+        <translation>8 (Recommended)</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>16 (Maksimum)</source>
+        <translation>16 (Maximum)</translation>
+    </message>
+    <message>
+        <location line="+2"/>
         <source>Bağlantı Sayısı:</source>
         <translation>Number of Connections:</translation>
     </message>
@@ -477,12 +618,32 @@ The Chrome, Opera, Firefox, Brave and Edge extensions are now ready.</translatio
         <translation>Download Type:</translation>
     </message>
     <message>
-        <location line="+35"/>
+        <location line="+2"/>
+        <source>En Yüksek</source>
+        <translation>Best</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Sadece Ses</source>
+        <translation>Audio only</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>yt-dlp bulunamadı: video indirmeleri çalışmaz. yt-dlp paketini kurun.</source>
+        <translation>yt-dlp not found: video downloads will not work. Install the yt-dlp package.</translation>
+    </message>
+    <message>
+        <location line="+49"/>
+        <source>Video başlığından otomatik alınır</source>
+        <translation>Taken from the video title</translation>
+    </message>
+    <message>
+        <location line="+12"/>
         <source>İndirme Dizinini Seç</source>
         <translation>Select Download Folder</translation>
     </message>
     <message>
-        <location line="+23"/>
+        <location line="+32"/>
         <source>Geçersiz Bağlantı</source>
         <translation>Invalid Link</translation>
     </message>
@@ -524,7 +685,7 @@ The Chrome, Opera, Firefox, Brave and Edge extensions are now ready.</translatio
         <translation>Only %1 MB of free space is left at the selected location. Continue anyway?</translation>
     </message>
     <message>
-        <location line="+25"/>
+        <location line="+29"/>
         <source>Dosya Zaten Var</source>
         <translation>File Already Exists</translation>
     </message>
@@ -537,7 +698,7 @@ The Chrome, Opera, Firefox, Brave and Edge extensions are now ready.</translatio
 <context>
     <name>QObject</name>
     <message>
-        <location filename="../src/core/DownloadItem.cpp" line="+76"/>
+        <location filename="../src/core/DownloadItem.cpp" line="-55"/>
         <source>Kuyrukta</source>
         <translation>Queued</translation>
     </message>
@@ -577,7 +738,7 @@ The Chrome, Opera, Firefox, Brave and Edge extensions are now ready.</translatio
         <translation>%1 downloaded</translation>
     </message>
     <message>
-        <location line="+90"/>
+        <location line="+101"/>
         <source>Tümü</source>
         <translation>All</translation>
     </message>
@@ -616,17 +777,27 @@ The Chrome, Opera, Firefox, Brave and Edge extensions are now ready.</translatio
         <source>Diğer</source>
         <translation>Other</translation>
     </message>
+    <message>
+        <location filename="../src/ui/MainWindow.cpp" line="-400"/>
+        <source>Tekrar Dene</source>
+        <translation>Retry</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Devam Et</source>
+        <translation>Resume</translation>
+    </message>
 </context>
 <context>
     <name>SegmentedDownloader</name>
     <message>
         <location filename="../src/core/SegmentedDownloader.cpp" line="+179"/>
-        <location line="+345"/>
+        <location line="+355"/>
         <source>Parça dosyası açılamadı</source>
         <translation>The part file could not be opened</translation>
     </message>
     <message>
-        <location line="-173"/>
+        <location line="-183"/>
         <location line="+98"/>
         <source>Sunucu hatası (HTTP %1)</source>
         <translation>Server error (HTTP %1)</translation>
@@ -645,7 +816,7 @@ The Chrome, Opera, Firefox, Brave and Edge extensions are now ready.</translatio
     </message>
     <message>
         <location line="-38"/>
-        <location line="+175"/>
+        <location line="+185"/>
         <location line="+11"/>
         <source>Part dosyası oluşturulamadı</source>
         <translation>The part file could not be created</translation>
@@ -752,8 +923,8 @@ The Chrome, Opera, Firefox, Brave and Edge extensions are now ready.</translatio
     </message>
     <message>
         <location line="+4"/>
-        <source>Panodaki bağlantıları izle ve indirme öner</source>
-        <translation>Watch the clipboard for links and offer to download them</translation>
+        <source>Panodaki bağlantıları izle: arşiv, program, video, ses, pdf/belge</source>
+        <translation>Watch clipboard links: archives, programs, video, audio, pdf/documents</translation>
     </message>
     <message>
         <location line="+1"/>
@@ -806,7 +977,7 @@ The Chrome, Opera, Firefox, Brave and Edge extensions are now ready.</translatio
         <translation>A port change takes effect after the application is restarted. The browser extension uses port 48213 by default.</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+11"/>
         <source>Tarayıcı Entegrasyonu</source>
         <translation>Browser Integration</translation>
     </message>
@@ -858,12 +1029,12 @@ The browser extension may also need to be set to use the same port.</translation
 <context>
     <name>TrayManager</name>
     <message>
-        <location filename="../src/ui/TrayManager.cpp" line="+24"/>
+        <location filename="../src/ui/TrayManager.cpp" line="+26"/>
         <source>HB Download Manager (Linux)</source>
         <translation>HB Download Manager (Linux)</translation>
     </message>
     <message>
-        <location line="+22"/>
+        <location line="+24"/>
         <source>Göster / Gizle</source>
         <translation>Show / Hide</translation>
     </message>
@@ -898,7 +1069,17 @@ The browser extension may also need to be set to use the same port.</translation
         <translation>Downloads are still in progress. Are you sure you want to quit the application?</translation>
     </message>
     <message>
-        <location line="+15"/>
+        <location line="+18"/>
+        <source>HB Download Manager çalışmaya devam ediyor</source>
+        <translation>HB Download Manager is still running</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Pencereyi kapatmak uygulamayı kapatmaz; indirmeler arka planda sürer. Tamamen çıkmak için tepsi simgesinden &quot;Çıkış&quot; seçin.</source>
+        <translation>Closing the window does not quit the app; downloads continue in the background. To exit completely, choose &quot;Quit&quot; from the tray icon.</translation>
+    </message>
+    <message>
+        <location line="+10"/>
         <source>İndirme Tamamlandı</source>
         <translation>Download Completed</translation>
     </message>
@@ -916,26 +1097,26 @@ The browser extension may also need to be set to use the same port.</translation
         <translation>yt-dlp not found. Please install yt-dlp on your system.</translation>
     </message>
     <message>
-        <location line="+256"/>
+        <location line="+255"/>
         <location line="+16"/>
-        <location line="+46"/>
+        <location line="+50"/>
         <location line="+16"/>
         <source>Ses indiriliyor...</source>
         <translation>Downloading audio...</translation>
     </message>
     <message>
-        <location line="-62"/>
-        <location line="+62"/>
+        <location line="-66"/>
+        <location line="+66"/>
         <source>Video indiriliyor...</source>
         <translation>Downloading video...</translation>
     </message>
     <message>
-        <location line="-54"/>
+        <location line="-58"/>
         <source>Kaldığı yerden devam ediliyor...</source>
         <translation>Resuming from where it stopped...</translation>
     </message>
     <message>
-        <location line="+75"/>
+        <location line="+81"/>
         <source>Ses ve görüntü birleştiriliyor...</source>
         <translation>Merging audio and video...</translation>
     </message>
@@ -945,7 +1126,7 @@ The browser extension may also need to be set to use the same port.</translation
         <translation>Finishing...</translation>
     </message>
     <message>
-        <location line="+27"/>
+        <location line="+50"/>
         <source>İptal edildi</source>
         <translation>Cancelled</translation>
     </message>

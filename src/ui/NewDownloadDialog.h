@@ -7,6 +7,8 @@
 #include <QRadioButton>
 #include <QPushButton>
 
+class QLabel;
+
 class NewDownloadDialog : public QDialog {
     Q_OBJECT
 public:
@@ -25,6 +27,7 @@ private slots:
     void onLaterClicked();
     void onUrlTextChanged(const QString &text);
     void onFileNameTextEdited(const QString &text);
+    void updateKindUi();
 
 private:
     void setupUi();
@@ -37,6 +40,9 @@ private:
     QComboBox *m_segmentsCombo;
     QRadioButton *m_fileRadio;
     QRadioButton *m_videoRadio;
+    QComboBox *m_qualityCombo;
+    QLabel *m_qualityLabel;
+    QLabel *m_toolWarnLabel;
     QPushButton *m_browseBtn;
     QPushButton *m_startBtn;
     QPushButton *m_laterBtn;
@@ -44,4 +50,7 @@ private:
 
     bool m_startImmediately;
     bool m_isFileNameAuto;
+    // The name suggested from the URL: only a different name counts as explicit
+    QString m_autoName;
+    QString m_parkedFileName;  // file name hidden while Video is selected
 };

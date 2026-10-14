@@ -16,6 +16,7 @@ private slots:
     void initTestCase();
     void testCompleteItemRoundtrip();
     void testStateTransitions();
+    void testNewFieldsRoundtrip();
     void testKindRoundtrip();
     void testEmptyJsonObject();
     void testCorruptDataTypes();
@@ -136,6 +137,28 @@ void TestJsonRoundtrip::testStateTransitions() {
 
     item.m_state = DownloadStateConnecting;
     QCOMPARE(DownloadItem::fromJson(item.toJson()).m_state, DownloadStatePaused);
+
+    // Paused by a clean quit (resumeOnStart): queued again at start-up, and the flag is not carried on
+    item.m_state = DownloadStatePaused;
+    item.m_resumeOnStart = true;
+    const DownloadItem resumed = DownloadItem::fromJson(item.toJson());
+    QCOMPARE(resumed.m_state, DownloadStateQueued);
+    QVERIFY(!resumed.m_resumeOnStart);
+    item.m_resumeOnStart = false;
+}
+
+void TestJsonRoundtrip::testNewFieldsRoundtrip() {
+    DownloadItem item(QUrl(QStringLiteral("https://example.org/get?id=1")));
+    QVERIFY(!item.m_fileNameExplicit);  // URL-derived name: the server may still name it
+    item.m_tempPaths << QStringLiteral("/tmp/x/a.f137.mp4") << QStringLiteral("/tmp/x/a.f140.m4a");
+    const DownloadItem back = DownloadItem::fromJson(item.toJson());
+    QVERIFY(!back.m_fileNameExplicit);
+    QCOMPARE(back.m_tempPaths, item.m_tempPaths);
+
+    // State files written before the flag existed keep their names
+    QJsonObject legacy = item.toJson();
+    legacy.remove(QStringLiteral("fileNameExplicit"));
+    QVERIFY(DownloadItem::fromJson(legacy).m_fileNameExplicit);
 }
 
 void TestJsonRoundtrip::testKindRoundtrip() {

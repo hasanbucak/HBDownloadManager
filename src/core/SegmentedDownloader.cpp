@@ -474,8 +474,12 @@ void SegmentedDownloader::handleProbeReply(QNetworkReply *reply) {
         ranges = false;
     }
 
+    // Server's name first, then the name at the end of the redirect chain
     QString contentDisp = QString::fromUtf8(reply->rawHeader("Content-Disposition"));
     QString suggestedName = parseContentDisposition(contentDisp);
+    if (suggestedName.isEmpty() && reply->url().isValid()) {
+        suggestedName = QFileInfo(reply->url().path()).fileName();
+    }
     if (suggestedName.isEmpty()) {
         suggestedName = QFileInfo(m_item.m_url.path()).fileName();
     }
@@ -485,9 +489,15 @@ void SegmentedDownloader::handleProbeReply(QNetworkReply *reply) {
         m_item.m_url = reply->url();
     }
 
-    if (m_item.m_fileName.isEmpty() || m_item.m_fileName == "download") {
-        m_item.m_fileName = suggestedName;
+    // A name the user or the browser chose stays; a URL-derived guess gives way to the server's.
+    // The decision is made once: a later re-probe (resume) must not rename the download.
+    if (m_item.m_fileName.isEmpty() || m_item.m_fileName == "download"
+        || (!m_item.m_fileNameExplicit && !suggestedName.isEmpty())) {
+        if (!suggestedName.isEmpty()) {
+            m_item.m_fileName = suggestedName;
+        }
     }
+    m_item.m_fileNameExplicit = true;
 
     // Check for HTML response when expecting a non-HTML file
     QString contentType = QString::fromUtf8(reply->rawHeader("Content-Type")).toLower();

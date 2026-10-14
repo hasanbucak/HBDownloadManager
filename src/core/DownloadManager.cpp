@@ -31,6 +31,7 @@ void copyEngineState(DownloadItem &dst, const DownloadItem &src) {
     if (!src.m_fileName.isEmpty()) {
         dst.m_fileName = src.m_fileName;
     }
+    dst.m_fileNameExplicit = src.m_fileNameExplicit;
 }
 }
 
@@ -109,6 +110,18 @@ QString DownloadManager::findIdByDownloader(QObject *downloader) const {
 }
 
 QString DownloadManager::addDownload(const DownloadItem &item, bool startImmediately) {
+    // The same link sent twice while the first copy is still in flight (double click on the page
+    // button, browser and clipboard both firing) would write the same target twice
+    for (int i = 0; i < m_items.size(); ++i) {
+        const DownloadItem &other = m_items.at(i);
+        const bool inFlight = (other.m_state == DownloadStateQueued || other.isActive());
+        const bool sameKind = (item.m_kind == DownloadKindUnspecified || other.m_kind == item.m_kind);
+        if (inFlight && sameKind
+            && (other.m_originalUrl == item.m_url || other.m_url == item.m_url)) {
+            return other.m_id;
+        }
+    }
+
     DownloadItem copy = item;
     if (copy.m_directory.isEmpty()) {
         copy.m_directory = m_defaultDir;
@@ -160,6 +173,10 @@ void DownloadManager::stopDownloader(const QString &id, bool immediateDelete) {
         VideoDownloader *downloader = m_activeVideo.take(id);
         downloader->disconnect(this);
         downloader->pause();
+        DownloadItem *item = findItem(id);
+        if (item != NULL) {
+            item->m_tempPaths = downloader->item().m_tempPaths;
+        }
         if (immediateDelete) {
             delete downloader;
         } else {
@@ -248,6 +265,13 @@ void DownloadManager::shutdown() {
         m_saveTimer->stop();
     }
 
+    // Whatever was running or waiting goes back into the queue at the next start
+    for (int i = 0; i < m_items.size(); ++i) {
+        if (m_items.at(i).m_state == DownloadStateQueued || m_items.at(i).isActive()) {
+            m_items[i].m_resumeOnStart = true;
+        }
+    }
+
     // Signal every yt-dlp process group first, so the waits below overlap instead of adding up
     for (QMap<QString, VideoDownloader*>::iterator it = m_activeVideo.begin(); it != m_activeVideo.end(); ++it) {
         if (it.value() != NULL) {
@@ -305,11 +329,14 @@ void DownloadManager::removeDownload(const QString &id, bool deleteFile) {
 
     // F7: Read item state BEFORE stopping downloader (do not turn Completed into Paused)
     const bool wasCompleted = (found->m_state == DownloadStateCompleted);
+    const bool isVideo = (found->m_kind == DownloadKindVideo || found->m_kind == DownloadKindAudio);
     const QString finalPath = found->m_finalPath;
     const QString directory = found->m_directory;
     const QString partPath = found->partFilePath();
 
-    stopDownloader(id);
+    stopDownloader(id);  // also collects the yt-dlp file list of a running video
+    found = findItem(id);
+    const QStringList tempPaths = (found != NULL ? found->m_tempPaths : QStringList());
 
     for (int i = 0; i < m_items.size(); ++i) {
         if (m_items.at(i).m_id == id) {
@@ -324,9 +351,28 @@ void DownloadManager::removeDownload(const QString &id, bool deleteFile) {
         QFile::remove(partPath);
     }
 
+    // Files another entry still points to (the same video added twice) are never removed
+    QSet<QString> inUse;
+    for (int i = 0; i < m_items.size(); ++i) {
+        if (!m_items.at(i).m_finalPath.isEmpty()) {
+            inUse.insert(QFileInfo(m_items.at(i).m_finalPath).absoluteFilePath());
+        }
+        // ...nor the files of another video that is still downloading
+        for (int t = 0; t < m_items.at(i).m_tempPaths.size(); ++t) {
+            inUse.insert(QFileInfo(m_items.at(i).m_tempPaths.at(t)).absoluteFilePath());
+        }
+    }
+
+    // An unfinished video leaves yt-dlp's own files (format files, .part, .ytdl, fragments,
+    // the merger's .temp output): they can be gigabytes and nothing else would ever remove them
+    if (isVideo && !wasCompleted) {
+        removeVideoLeftovers(tempPaths, directory, inUse);
+    }
+
     // The final file only when explicitly asked, only for a Completed item, and only inside its folder
     if (deleteFile && wasCompleted && !finalPath.isEmpty()
-        && PathUtils::isInsideDir(finalPath, directory)) {
+        && PathUtils::isInsideDir(finalPath, directory)
+        && !inUse.contains(QFileInfo(finalPath).absoluteFilePath())) {
         if (QFile::exists(finalPath)) {
             QFile::remove(finalPath);
         }
@@ -403,6 +449,7 @@ void DownloadManager::onSegmentedProbed(const ProbeResult &res) {
         if (!res.m_suggestedFileName.isEmpty()) {
             it->m_fileName = res.m_suggestedFileName;
         }
+        it->m_fileNameExplicit = true;  // decided at the first probe; a resume keeps the name
         emit atItemUpdated(*it);
     }
 }
@@ -453,9 +500,74 @@ void DownloadManager::onSegmentedFinished(bool success, const QString &errMsg) {
     processQueue();
 }
 
+void DownloadManager::syncVideoTempPaths(DownloadItem *it, QObject *downloader) {
+    VideoDownloader *vd = qobject_cast<VideoDownloader*>(downloader);
+    if (it != NULL && vd != NULL) {
+        it->m_tempPaths = vd->item().m_tempPaths;
+    }
+}
+
+void DownloadManager::removeVideoLeftovers(const QStringList &recorded, const QString &directory,
+                                           const QSet<QString> &inUse) {
+    // yt-dlp names format files "<stem>.f<format id>.<ext>". The next format may already be on disk
+    // before its "Destination" line reached us (the process is stopped mid-way), so every sibling
+    // format file of a recorded one counts as ours too.
+    // Format id with a digit (f137, f0, fhls-720) and a media extension: "my.file.mp4" is no format file
+    static const QString kFmt = QStringLiteral("\\.f[A-Za-z_-]*[0-9][A-Za-z0-9_-]*\\.(?:mp4|m4a|webm|mkv|mp3|opus|ogg|aac|flv|3gp|ts|mov|wav|flac)");
+    static const QRegularExpression formatFile(QStringLiteral("^(.+)") + kFmt + QStringLiteral("$"));
+    static const QRegularExpression formatTail(QStringLiteral("^") + kFmt + QStringLiteral("(\\.part.*|\\.ytdl)?$"));
+    QStringList paths = recorded;
+    for (int i = 0; i < recorded.size(); ++i) {
+        const QFileInfo fi(recorded.at(i));
+        const QRegularExpressionMatch m = formatFile.match(fi.fileName());
+        if (!m.hasMatch()) continue;
+        const QString stem = m.captured(1);
+        const QStringList entries = QDir(fi.absolutePath()).entryList(QDir::Files | QDir::Hidden);
+        for (int e = 0; e < entries.size(); ++e) {
+            const QString &name = entries.at(e);
+            if (name.startsWith(stem) && formatTail.match(name.mid(stem.size())).hasMatch()) {
+                // Reduce "<x>.f1.m4a.part-Frag2.part" to its format file "<x>.f1.m4a"
+                QString formatName = name;
+                const int partPos = formatName.indexOf(QStringLiteral(".part"), stem.size());
+                if (partPos > 0) formatName = formatName.left(partPos);
+                if (formatName.endsWith(QStringLiteral(".ytdl"))) formatName.chop(5);
+                const QString full = QDir(fi.absolutePath()).filePath(formatName);
+                if (!paths.contains(full)) paths.append(full);
+            }
+        }
+    }
+
+    for (int i = 0; i < paths.size(); ++i) {
+        const QFileInfo base(paths.at(i));
+        if (base.fileName().isEmpty()) continue;
+        QStringList victims;
+        victims << base.absoluteFilePath()
+                << base.absoluteFilePath() + ".part"
+                << base.absoluteFilePath() + ".ytdl"
+                << QDir(base.absolutePath()).filePath(base.completeBaseName() + ".temp." + base.suffix());
+        // Plain prefix match: titles often contain "[...]", which a name filter reads as a wildcard
+        const QString fragPrefix = base.fileName() + ".part-Frag";
+        const QStringList entries = QDir(base.absolutePath()).entryList(QDir::Files | QDir::Hidden);
+        for (int f = 0; f < entries.size(); ++f) {
+            if (entries.at(f).startsWith(fragPrefix)) {
+                victims << QDir(base.absolutePath()).filePath(entries.at(f));
+            }
+        }
+        for (int v = 0; v < victims.size(); ++v) {
+            const QString &victim = victims.at(v);
+            if (inUse.contains(QFileInfo(victim).absoluteFilePath())) continue;
+            if (!PathUtils::isInsideDir(victim, directory)) continue;
+            if (QFile::exists(victim)) {
+                QFile::remove(victim);
+            }
+        }
+    }
+}
+
 void DownloadManager::onVideoTitleDetected(const QString &title) {
     QString id = findIdByDownloader(sender());
     DownloadItem *it = findItem(id);
+    syncVideoTempPaths(it, sender());
     if (it != NULL && !title.isEmpty()) {
         it->m_fileName = title;
         emit atItemUpdated(*it);
@@ -489,6 +601,7 @@ void DownloadManager::onVideoProgressUpdated(double pct, qint64 totalBytes, qint
     Q_UNUSED(etaStr);
     QString id = findIdByDownloader(sender());
     DownloadItem *it = findItem(id);
+    syncVideoTempPaths(it, sender());
     if (it != NULL) {
         it->m_stage = stage;
         it->m_videoPercent = pct;
@@ -522,6 +635,8 @@ void DownloadManager::onVideoFinished(bool success, const QString &finalPath, co
         // S4: Clear sensitive session cookies upon completion or permanent failure
         it->m_cookies = QJsonArray();
         it->m_cookieHeader.clear();
+        // Kept after a failure so that removing the entry still cleans up; no longer needed once done
+        it->m_tempPaths = (success ? QStringList() : updated.m_tempPaths);
 
         if (success) {
             it->m_state = DownloadStateCompleted;
@@ -708,6 +823,7 @@ void DownloadManager::setMaxConcurrentDownloads(int count) {
     m_maxConcurrent = qMax(1, count);
     QSettings settings("HasanBucak", "hb-download-manager");
     settings.setValue("maxConcurrentDownloads", m_maxConcurrent);
+    processQueue();  // a higher limit starts waiting items right away
 }
 
 quint16 DownloadManager::serverPort() const { return m_serverPort; }

@@ -22,6 +22,9 @@ NewDownloadDialog::NewDownloadDialog(const QUrl &url, QWidget *parent)
       m_segmentsCombo(new QComboBox(this)),
       m_fileRadio(new QRadioButton(tr("Normal Dosya"), this)),
       m_videoRadio(new QRadioButton(tr("Video / Medya Akışı (yt-dlp)"), this)),
+      m_qualityCombo(new QComboBox(this)),
+      m_qualityLabel(new QLabel(tr("Kalite:"), this)),
+      m_toolWarnLabel(new QLabel(this)),
       m_browseBtn(new QPushButton(tr("Gözat..."), this)),
       m_startBtn(new QPushButton(tr("Hemen İndir"), this)),
       m_laterBtn(new QPushButton(tr("Daha Sonra İndir"), this)),
@@ -35,6 +38,7 @@ NewDownloadDialog::NewDownloadDialog(const QUrl &url, QWidget *parent)
         QString name = QFileInfo(url.path()).fileName();
         if (name.isEmpty()) name = "download";
         m_fileNameEdit->setText(name);
+        m_autoName = name;
 
         if (MediaHosts::isStreamingSite(url.host())) {
             m_videoRadio->setChecked(true);
@@ -49,15 +53,32 @@ NewDownloadDialog::NewDownloadDialog(const QUrl &url, QWidget *parent)
 
     // U7: Pre-select segment combo index based on defaultSegments()
     int defSegs = DownloadManager::instance().defaultSegments();
+    int segIndex = -1;
     for (int i = 0; i < m_segmentsCombo->count(); ++i) {
         if (m_segmentsCombo->itemData(i).toInt() == defSegs) {
-            m_segmentsCombo->setCurrentIndex(i);
+            segIndex = i;
             break;
         }
     }
+    if (segIndex < 0 && defSegs >= 1 && defSegs <= 16) {
+        // A value from Settings that is not a preset (e.g. 6): add it in order so the setting is honoured
+        segIndex = m_segmentsCombo->count();
+        for (int i = 0; i < m_segmentsCombo->count(); ++i) {
+            if (m_segmentsCombo->itemData(i).toInt() > defSegs) {
+                segIndex = i;
+                break;
+            }
+        }
+        m_segmentsCombo->insertItem(segIndex, QString::number(defSegs), defSegs);
+    }
+    if (segIndex >= 0) {
+        m_segmentsCombo->setCurrentIndex(segIndex);
+    }
+    updateKindUi();
 
     connect(m_urlEdit, SIGNAL(textChanged(QString)), this, SLOT(onUrlTextChanged(QString)));
     connect(m_fileNameEdit, SIGNAL(textEdited(QString)), this, SLOT(onFileNameTextEdited(QString)));
+    connect(m_videoRadio, SIGNAL(toggled(bool)), this, SLOT(updateKindUi()));
     connect(m_browseBtn, SIGNAL(clicked()), this, SLOT(onBrowseClicked()));
     connect(m_startBtn, SIGNAL(clicked()), this, SLOT(onStartClicked()));
     connect(m_laterBtn, SIGNAL(clicked()), this, SLOT(onLaterClicked()));
@@ -69,7 +90,7 @@ NewDownloadDialog::~NewDownloadDialog() {
 
 void NewDownloadDialog::setupUi() {
     setWindowTitle(tr("Yeni İndirme Başlat"));
-    resize(520, 260);
+    resize(520, 320);
 
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
     QFormLayout *formLayout = new QFormLayout();
@@ -85,8 +106,8 @@ void NewDownloadDialog::setupUi() {
     m_segmentsCombo->addItem("1", 1);
     m_segmentsCombo->addItem("2", 2);
     m_segmentsCombo->addItem("4", 4);
-    m_segmentsCombo->addItem("8 (Önerilen)", 8);
-    m_segmentsCombo->addItem("16 (Maksimum)", 16);
+    m_segmentsCombo->addItem(tr("8 (Önerilen)"), 8);
+    m_segmentsCombo->addItem(tr("16 (Maksimum)"), 16);
     m_segmentsCombo->setCurrentIndex(3);
     formLayout->addRow(tr("Bağlantı Sayısı:"), m_segmentsCombo);
 
@@ -96,7 +117,20 @@ void NewDownloadDialog::setupUi() {
     kindLayout->addStretch();
     formLayout->addRow(tr("İndirme Türü:"), kindLayout);
 
+    m_qualityCombo->addItem(tr("En Yüksek"), "best");
+    m_qualityCombo->addItem("1080p", "1080");
+    m_qualityCombo->addItem("720p", "720");
+    m_qualityCombo->addItem("480p", "480");
+    m_qualityCombo->addItem(tr("Sadece Ses"), "audio");
+    formLayout->addRow(m_qualityLabel, m_qualityCombo);
+
+    m_toolWarnLabel->setWordWrap(true);
+    m_toolWarnLabel->setStyleSheet("color: #ffd166;");
+    m_toolWarnLabel->setText(tr("yt-dlp bulunamadı: video indirmeleri çalışmaz. yt-dlp paketini kurun."));
+    m_toolWarnLabel->hide();
+
     mainLayout->addLayout(formLayout);
+    mainLayout->addWidget(m_toolWarnLabel);
 
     QHBoxLayout *btnLayout = new QHBoxLayout();
     btnLayout->addStretch();
@@ -115,17 +149,41 @@ void NewDownloadDialog::onUrlTextChanged(const QString &text) {
             QString n = QFileInfo(u.path()).fileName();
             if (n.isEmpty()) n = "download";
             m_fileNameEdit->setText(n);
+            m_autoName = n;
             m_isFileNameAuto = true;
         }
         if (MediaHosts::isStreamingSite(u.host())) {
             m_videoRadio->setChecked(true);
         }
     }
+    updateKindUi();  // the radio may already have been on Video: no toggled() to clear the name
 }
 
 void NewDownloadDialog::onFileNameTextEdited(const QString &text) {
     Q_UNUSED(text);
     m_isFileNameAuto = false;
+}
+
+void NewDownloadDialog::updateKindUi() {
+    const bool video = m_videoRadio->isChecked();
+    m_qualityLabel->setVisible(video);
+    m_qualityCombo->setVisible(video);
+    // yt-dlp names the file from the video title: an empty field with a hint, not a stale "watch".
+    // The file name is kept aside and comes back when the user switches to a regular file.
+    if (video) {
+        if (!m_fileNameEdit->text().isEmpty()) {
+            m_parkedFileName = m_fileNameEdit->text();
+            m_fileNameEdit->clear();
+        }
+        m_fileNameEdit->setPlaceholderText(tr("Video başlığından otomatik alınır"));
+    } else {
+        m_fileNameEdit->setPlaceholderText(QString());
+        if (m_fileNameEdit->text().isEmpty() && !m_parkedFileName.isEmpty()) {
+            m_fileNameEdit->setText(m_parkedFileName);
+        }
+    }
+    m_fileNameEdit->setEnabled(!video);
+    m_toolWarnLabel->setVisible(video && !VideoDownloader::isAvailable());
 }
 
 void NewDownloadDialog::onBrowseClicked() {
@@ -139,11 +197,20 @@ DownloadItem NewDownloadDialog::downloadItem() const {
     QUrl url(m_urlEdit->text().trimmed());
     DownloadItem item(url, m_directoryEdit->text().trimmed());
 
-    QString name = m_fileNameEdit->text().trimmed();
-    if (!name.isEmpty()) {
-        item.m_fileName = PathUtils::sanitizeFileName(name);
+    if (m_videoRadio->isChecked()) {
+        const QString quality = m_qualityCombo->currentData().toString();
+        item.m_kind = (quality == "audio" ? DownloadKindAudio : DownloadKindVideo);
+        item.m_quality = quality;
+        item.m_fileNameExplicit = false;
+    } else {
+        item.m_kind = DownloadKindFile;
+        const QString name = m_fileNameEdit->text().trimmed();
+        if (!name.isEmpty()) {
+            item.m_fileName = PathUtils::sanitizeFileName(name);
+        }
+        // Only a name the user typed over the URL suggestion beats the server's Content-Disposition name
+        item.m_fileNameExplicit = (!m_isFileNameAuto && !name.isEmpty() && name != m_autoName);
     }
-    item.m_kind = (m_videoRadio->isChecked() ? DownloadKindVideo : DownloadKindFile);
     item.m_requestedSegments = m_segmentsCombo->currentData().toInt();
 
     return item;
@@ -187,8 +254,12 @@ bool NewDownloadDialog::validateInputs() {
         }
     }
 
-    // File exists: the engine never overwrites, it saves under the next free name
+    // File exists: the engine never overwrites, it saves under the next free name.
+    // Video items are named by yt-dlp, so there is no name to compare.
     DownloadItem item = downloadItem();
+    if (item.m_kind != DownloadKindFile) {
+        return true;
+    }
     const QString wanted = QDir(dir).filePath(item.m_fileName);
     bool clash = QFileInfo::exists(wanted);
     if (!clash) {

@@ -4,6 +4,7 @@
 #include "SegmentedDownloader.h"
 #include "VideoDownloader.h"
 #include <QObject>
+#include <QSet>
 #include <QList>
 #include <QMap>
 
@@ -71,6 +72,9 @@ private:
     void startItem(DownloadItem *item);
     void stopDownloader(const QString &id, bool immediateDelete = false);
     void cleanupOrphanParts();
+    void syncVideoTempPaths(DownloadItem *it, QObject *downloader);
+    static void removeVideoLeftovers(const QStringList &recorded, const QString &directory,
+                                     const QSet<QString> &inUse);
     QString configFilePath() const;
     QString findIdByDownloader(QObject *downloader) const;
 

@@ -244,7 +244,7 @@ int main(int argc, char *argv[]) {
         if (!urlCandidate.isEmpty()) {
             NewDownloadDialog dlg(QUrl(urlCandidate), &mainWindow);
             if (dlg.exec() == QDialog::Accepted) {
-                dm.addDownload(dlg.downloadItem(), dlg.shouldStartImmediately());
+                mainWindow.submitDownload(dlg.downloadItem(), dlg.shouldStartImmediately());
             }
         }
     }

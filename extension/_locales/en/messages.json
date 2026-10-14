@@ -143,5 +143,134 @@
   },
   "popupAutoLaunch": {
     "message": "Open the app when a download arrives"
+  },
+  "notifMismatchBody": {
+    "message": "Port $V$: HB Download Manager could not be verified.",
+    "placeholders": {
+      "v": {
+        "content": "$1"
+      }
+    }
+  },
+  "errOffline": {
+    "message": "The app is not running"
+  },
+  "errUnverified": {
+    "message": "The app could not be verified"
+  },
+  "errMismatch": {
+    "message": "The app could not be verified (bridge token mismatch)"
+  },
+  "errApp": {
+    "message": "The app rejected the request"
+  },
+  "errNetwork": {
+    "message": "Could not reach the app"
+  },
+  "errNoAnswer": {
+    "message": "The extension did not respond"
+  },
+  "msgDuplicate": {
+    "message": "Already downloading"
+  },
+  "popupAuthMismatch": {
+    "message": "App found but could not be verified: run Settings > Install Browser Extension Bridge in the app."
+  },
+  "popupUnverified": {
+    "message": "App not verified"
+  },
+  "popupQueued": {
+    "message": "Queued"
+  },
+  "popupPortInvalid": {
+    "message": "Enter a port between 1024 and 65535."
+  },
+  "popupQBest": {
+    "message": "🌟 Best quality (1080p/4K MP4)"
+  },
+  "popupQ1080": {
+    "message": "🎬 Full HD (1080p MP4)"
+  },
+  "popupQ720": {
+    "message": "📺 HD (720p MP4)"
+  },
+  "popupQ480": {
+    "message": "📱 Standard (480p MP4)"
+  },
+  "popupQAudio": {
+    "message": "🎵 Audio only (MP3)"
+  },
+  "ovLabel": {
+    "message": "Download This Video"
+  },
+  "ovMainTitle": {
+    "message": "Download this video with HB Download Manager"
+  },
+  "ovQualityTitle": {
+    "message": "Quality options (4K, 1440p, 1080p, 720p, MP3)"
+  },
+  "ovSending": {
+    "message": "⏳ Sending..."
+  },
+  "ovSentVideo": {
+    "message": "✓ Sent to the app!"
+  },
+  "ovSentAudio": {
+    "message": "✓ Downloading audio..."
+  },
+  "ovCopied": {
+    "message": "✓ Link copied!"
+  },
+  "qBest": {
+    "message": "Best quality"
+  },
+  "qBestWith": {
+    "message": "Best quality ($B$)",
+    "placeholders": {
+      "b": {
+        "content": "$1"
+      }
+    }
+  },
+  "qAuto": {
+    "message": "Auto"
+  },
+  "qFullHd": {
+    "message": "Full HD quality"
+  },
+  "qHd": {
+    "message": "HD quality"
+  },
+  "qStandard": {
+    "message": "Standard quality"
+  },
+  "qLow": {
+    "message": "Low quality"
+  },
+  "qOther": {
+    "message": "$H$p quality",
+    "placeholders": {
+      "h": {
+        "content": "$1"
+      }
+    }
+  },
+  "qAudioOnly": {
+    "message": "Download audio only"
+  },
+  "qCopyLink": {
+    "message": "Copy video link"
+  },
+  "xBtnLabel": {
+    "message": "Download"
+  },
+  "xBtnTitle": {
+    "message": "Download the video with HB Download Manager"
+  },
+  "xBtnSent": {
+    "message": "Sent"
+  },
+  "xBtnFailed": {
+    "message": "Failed"
   }
 }

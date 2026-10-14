@@ -153,7 +153,7 @@ async function ping(settings) {
       lastPingStatus = 'mismatch';
       if (!mismatchNotified) {
         mismatchNotified = true;
-        notify(t('notifOfflineTitle'), 'Port ' + settings.port + ': HB Download Manager could not be verified.');
+        notify(t('notifOfflineTitle'), t('notifMismatchBody', [String(settings.port)]));
       }
       return null;
     }
@@ -282,6 +282,12 @@ function notify(title, message) {
   } catch {}
 }
 
+// Maps an internal error code to a localized message so pages and the popup never show raw codes
+const ERROR_KEYS = { 'app offline': 'errOffline', 'app unverified': 'errUnverified', 'app mismatch': 'errMismatch', 'app error': 'errApp', network: 'errNetwork' };
+function failure(code) {
+  return { ok: false, error: code, message: t(ERROR_KEYS[code] || 'errNetwork') };
+}
+
 async function sendToApp({ url, filename, referer, kind, quality, estimatedBytes }) {
   const settings = await getSettings();
   let app = await ping(settings);
@@ -290,7 +296,7 @@ async function sendToApp({ url, filename, referer, kind, quality, estimatedBytes
   }
   if (!app) {
     // Cookies are only ever sent to a bridge that proved it knows our token
-    return { ok: false, error: 'app ' + lastPingStatus };
+    return failure('app ' + lastPingStatus);
   }
 
   const ck = await cookiesFor(url);
@@ -302,17 +308,26 @@ async function sendToApp({ url, filename, referer, kind, quality, estimatedBytes
   if (kind === 'video' || kind === 'audio') {
     payload.quality = quality || 'best';
   }
+  let res;
   try {
-    const res = await bridgeRequest(settings, 'POST', '/download', payload);
-    const j = res.body;
-    if (!j || !j.ok) throw new Error((j && j.error) || 'app error');
-    notify(kind === 'video' || kind === 'audio' ? t('notifVideoTitle') : t('notifSentTitle'), filename || url);
-    startProgress();
-    return { ok: true };
+    res = await bridgeRequest(settings, 'POST', '/download', payload);
   } catch (e) {
     notify(t('notifOfflineTitle'), t('notifOfflineBody'));
-    return { ok: false, error: String(e) };
+    return failure('network');
   }
+  const j = res && res.body;
+  if (!j || !j.ok) {
+    notify(t('notifOfflineTitle'), t('errApp'));
+    return failure('app error');
+  }
+  if (j.duplicate) {
+    notify(t('msgDuplicate'), filename || url);
+    startProgress();
+    return { ok: true, duplicate: true };
+  }
+  notify(kind === 'video' || kind === 'audio' ? t('notifVideoTitle') : t('notifSentTitle'), filename || url);
+  startProgress();
+  return { ok: true };
 }
 
 // Launch the app through native messaging: Safari's app extension, or the host bundled with the app

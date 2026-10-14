@@ -23,6 +23,9 @@
 #include <QClipboard>
 #include <QSettings>
 #include <QTimer>
+#include <QShortcut>
+#include <QDir>
+#include <QFile>
 #include "SettingsDialog.h"
 #include "../core/VideoDownloader.h"
 
@@ -49,6 +52,8 @@ MainWindow::MainWindow(QWidget *parent)
     refreshTable();
     restoreWindowState();
     updateToolWarnings();
+    updateStatusBar();
+    updateActionStates();
 
     connect(&DownloadManager::instance(), SIGNAL(atItemAdded(DownloadItem)),
             this, SLOT(onItemAdded(DownloadItem)));
@@ -81,11 +86,27 @@ void MainWindow::restoreWindowState() {
 }
 
 void MainWindow::updateToolWarnings() {
-    // P3: yt-dlp merges video and audio with ffmpeg; tell the user when it is missing
-    if (!VideoDownloader::isFfmpegAvailable()) {
-        const QString tip = tr("ffmpeg bulunamadı: video/ses birleştirme gerektiren medya indirmeleri başarısız olabilir. ffmpeg paketini kurun.");
+    // yt-dlp downloads video; it merges video and audio with ffmpeg. Tell the user when either is missing.
+    const bool noYtDlp = !VideoDownloader::isAvailable();
+    const bool noFfmpeg = !VideoDownloader::isFfmpegAvailable();
+    QStringList tips;
+    if (noYtDlp) {
+        tips << tr("yt-dlp bulunamadı: video ve medya indirmeleri çalışmaz. yt-dlp paketini kurun.");
+    }
+    if (noFfmpeg) {
+        tips << tr("ffmpeg bulunamadı: video/ses birleştirme gerektiren medya indirmeleri başarısız olabilir. ffmpeg paketini kurun.");
+    }
+
+    if (noYtDlp && noFfmpeg) {
+        m_statusToolsLabel->setText(tr("Uyarı: yt-dlp ve ffmpeg yok"));
+    } else if (noYtDlp) {
+        m_statusToolsLabel->setText(tr("Uyarı: yt-dlp yok"));
+    } else if (noFfmpeg) {
         m_statusToolsLabel->setText(tr("Uyarı: ffmpeg yok"));
-        m_statusToolsLabel->setToolTip(tip);
+    }
+
+    if (noYtDlp || noFfmpeg) {
+        m_statusToolsLabel->setToolTip(tips.join("\n"));
         m_statusToolsLabel->setStyleSheet("color: #ffd166; font-weight: bold;");
         m_statusToolsLabel->show();
     } else {
@@ -106,7 +127,7 @@ void MainWindow::setServerStatus(bool listening, quint16 port, const QString &er
 
 void MainWindow::setupUi() {
     setWindowTitle(tr("HB Download Manager (Linux)"));
-    resize(960, 580);
+    resize(1100, 640);
 
     setupMenuBar();
     setupToolBar();
@@ -125,9 +146,25 @@ void MainWindow::setupUi() {
 
 void MainWindow::setupMenuBar() {
     QMenu *fileMenu = menuBar()->addMenu(tr("&Dosya"));
-    fileMenu->addAction(tr("&Yeni İndirme..."), this, SLOT(onNewDownloadClicked()), QKeySequence::New);
+    // Explicit QActions: the (text, receiver, member, shortcut) overload is deprecated in Qt 6
+    QAction *actNewMenu = fileMenu->addAction(tr("&Yeni İndirme..."));
+    actNewMenu->setShortcut(QKeySequence::New);
+    connect(actNewMenu, SIGNAL(triggered()), this, SLOT(onNewDownloadClicked()));
     fileMenu->addSeparator();
-    m_actQuit = fileMenu->addAction(tr("&Çıkış"), this, SLOT(onQuitTriggered()), QKeySequence(Qt::CTRL | Qt::Key_Q));
+    m_actQuit = fileMenu->addAction(tr("&Çıkış"));
+    m_actQuit->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Q));
+    connect(m_actQuit, SIGNAL(triggered()), this, SLOT(onQuitTriggered()));
+
+    QMenu *helpMenu = menuBar()->addMenu(tr("&Yardım"));
+    QAction *actAbout = helpMenu->addAction(tr("&Hakkında"));
+    connect(actAbout, SIGNAL(triggered()), this, SLOT(onAboutTriggered()));
+}
+
+void MainWindow::onAboutTriggered() {
+    QMessageBox::about(this, tr("Hakkında"),
+                       tr("<b>HB Download Manager</b><br>Sürüm %1<br><br>"
+                          "Çok parçalı indirme, yt-dlp ile video indirme ve tarayıcı eklentisi desteği.")
+                           .arg(QCoreApplication::applicationVersion().toHtmlEscaped()));
 }
 
 void MainWindow::setupToolBar() {
@@ -170,18 +207,43 @@ void MainWindow::setupTable() {
             << tr("Hız") << tr("Kalan Süre") << tr("Durum") << tr("Eklenme Tarihi");
     m_downloadTable->setHorizontalHeaderLabels(headers);
 
+    // The file name takes whatever the other, compact columns leave; together they fit the default
+    // window, so the name never collapses to the minimum section width
     m_downloadTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     m_downloadTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     m_downloadTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Interactive);
-    m_downloadTable->setColumnWidth(2, 140);
+    m_downloadTable->setColumnWidth(2, 110);
     m_downloadTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
     m_downloadTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
-    m_downloadTable->horizontalHeader()->setSectionResizeMode(5, QHeaderView::ResizeToContents);
+    // Status can hold a long error text: fixed width (elided, full text in the tooltip)
+    m_downloadTable->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Interactive);
+    m_downloadTable->setColumnWidth(5, 130);
     m_downloadTable->horizontalHeader()->setSectionResizeMode(6, QHeaderView::ResizeToContents);
+    m_downloadTable->setWordWrap(false);  // with wrapping on, Qt elides at the end regardless of the mode
+    m_downloadTable->setTextElideMode(Qt::ElideMiddle);  // keeps the extension of a long name visible
+
+    m_downloadTable->horizontalHeader()->setMinimumSectionSize(60);
+    // The white row-number strip is useless (and ugly in the dark theme)
+    m_downloadTable->verticalHeader()->setVisible(false);
 
     m_downloadTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_downloadTable->setSelectionMode(QAbstractItemView::SingleSelection);
     m_downloadTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_downloadTable->setContextMenuPolicy(Qt::CustomContextMenu);
+
+    // Delete removes, Enter opens; the view ignores both so they would only reach the splitter
+    const int keys[] = { Qt::Key_Delete, Qt::Key_Return, Qt::Key_Enter };
+    for (int i = 0; i < 3; ++i) {
+        QShortcut *sc = new QShortcut(QKeySequence(keys[i]), m_downloadTable);
+        sc->setContext(Qt::WidgetShortcut);
+        if (keys[i] == Qt::Key_Delete) {
+            connect(sc, SIGNAL(activated()), this, SLOT(onRemoveClicked()));
+        } else {
+            connect(sc, SIGNAL(activated()), this, SLOT(onEnterPressed()));
+        }
+    }
+    connect(m_downloadTable, SIGNAL(itemSelectionChanged()), this, SLOT(updateActionStates()));
+    connect(m_downloadTable, SIGNAL(currentCellChanged(int,int,int,int)), this, SLOT(updateActionStates()));
 
     connect(m_downloadTable, SIGNAL(cellDoubleClicked(int,int)), this, SLOT(onTableDoubleClicked(int,int)));
     connect(m_downloadTable, SIGNAL(customContextMenuRequested(QPoint)), this, SLOT(onTableContextMenu(QPoint)));
@@ -193,7 +255,6 @@ void MainWindow::setupStatusBar() {
     statusBar()->addPermanentWidget(m_statusSpeedLabel);
     statusBar()->addPermanentWidget(m_statusServerLabel);
 
-    m_statusActiveLabel->setText(tr("0 Aktif İndirme"));
     m_statusSpeedLabel->setText(tr("Toplam Hız: 0 B/s"));
     m_statusServerLabel->setText(tr("Köprü: 127.0.0.1:48213 (Aktif)"));
 }
@@ -275,14 +336,35 @@ void MainWindow::refreshTable() {
             m_downloadTable->selectRow(selRow);
         }
     }
+    updateActionStates();
+}
+
+void MainWindow::setCellText(int row, int column, const QString &text, const QString &tooltip) {
+    // Update in place: replacing items every tick resets hover/selection state and churns the allocator
+    QTableWidgetItem *cell = m_downloadTable->item(row, column);
+    if (cell == NULL) {
+        cell = new QTableWidgetItem(text);
+        m_downloadTable->setItem(row, column, cell);
+    } else if (cell->text() != text) {
+        cell->setText(text);
+    }
+    if (cell->toolTip() != tooltip) {
+        cell->setToolTip(tooltip);
+    }
 }
 
 void MainWindow::updateTableRow(int row, const DownloadItem &item) {
-    QTableWidgetItem *item0 = new QTableWidgetItem(item.m_fileName);
+    QTableWidgetItem *item0 = m_downloadTable->item(row, 0);
+    if (item0 == NULL) {
+        item0 = new QTableWidgetItem(item.m_fileName);
+        m_downloadTable->setItem(row, 0, item0);
+    } else if (item0->text() != item.m_fileName) {
+        item0->setText(item.m_fileName);
+    }
     item0->setData(Qt::UserRole, item.m_id);
-    m_downloadTable->setItem(row, 0, item0);
+    item0->setToolTip(item.m_fileName);
 
-    m_downloadTable->setItem(row, 1, new QTableWidgetItem(item.formattedSize()));
+    setCellText(row, 1, item.formattedSize());
 
     // İlerleme Çubuğu Widget'ı
     QProgressBar *pb = qobject_cast<QProgressBar*>(m_downloadTable->cellWidget(row, 2));
@@ -294,21 +376,41 @@ void MainWindow::updateTableRow(int row, const DownloadItem &item) {
                           "QProgressBar::chunk { background: #4CAF50; border-radius: 2px; }");
         m_downloadTable->setCellWidget(row, 2, pb);
     }
-    pb->setValue(static_cast<int>(item.progress() * 100.0));
-
-    m_downloadTable->setItem(row, 3, new QTableWidgetItem(item.formattedSpeed()));
-    m_downloadTable->setItem(row, 4, new QTableWidgetItem(item.formattedEta()));
-
-    QTableWidgetItem *stateItem = new QTableWidgetItem(item.stateString());
-    if (item.m_state == DownloadStateError && !item.m_errorMessage.isEmpty()) {
-        stateItem->setToolTip(item.m_errorMessage);
+    // Unknown size while running: a busy bar instead of a frozen 0%
+    const bool sizeUnknown = (item.m_totalBytes <= 0 && item.progress() <= 0.0);
+    if (item.isActive() && sizeUnknown) {
+        if (pb->maximum() != 0) {
+            pb->setRange(0, 0);
+        }
+    } else {
+        if (pb->maximum() == 0) {
+            pb->setRange(0, 100);
+        }
+        pb->setValue(static_cast<int>(item.progress() * 100.0));
     }
-    m_downloadTable->setItem(row, 5, stateItem);
+
+    setCellText(row, 3, item.formattedSpeed());
+    setCellText(row, 4, item.formattedEta());
+
+    QString statusText = item.stateString();
+    QString statusTip;
+    if (item.m_state == DownloadStateError && !item.m_errorMessage.isEmpty()) {
+        QString shortMsg = item.m_errorMessage.section('\n', 0, 0).trimmed();
+        if (shortMsg.size() > 40) {
+            shortMsg = shortMsg.left(37) + "...";
+        }
+        statusText = tr("Hata: %1").arg(shortMsg);
+        statusTip = item.m_errorMessage;
+    } else if (item.isActive() && !item.m_stage.isEmpty() &&
+               (item.m_kind == DownloadKindVideo || item.m_kind == DownloadKindAudio)) {
+        statusText = item.m_stage;
+    }
+    setCellText(row, 5, statusText, statusTip);
 
     QString dateStr = item.m_createdAt.isValid()
-        ? item.m_createdAt.toString("dd.MM.yyyy hh:mm")
-        : QDateTime::currentDateTime().toString("dd.MM.yyyy hh:mm");
-    m_downloadTable->setItem(row, 6, new QTableWidgetItem(dateStr));
+        ? item.m_createdAt.toString("dd.MM.yy hh:mm")
+        : QDateTime::currentDateTime().toString("dd.MM.yy hh:mm");
+    setCellText(row, 6, dateStr);
 }
 
 int MainWindow::findRowById(const QString &id) const {
@@ -336,6 +438,32 @@ void MainWindow::requestNewDownload() {
     onUrlDetected(QUrl());
 }
 
+static bool canPauseItem(const DownloadItem &it) {
+    return it.m_state == DownloadStateQueued || it.isActive();
+}
+
+static bool canResumeItem(const DownloadItem &it) {
+    return it.m_state == DownloadStatePaused || it.m_state == DownloadStateError ||
+           it.m_state == DownloadStateCancelled;
+}
+
+static QString resumeLabel(const DownloadItem &it) {
+    return it.m_state == DownloadStateError ? QObject::tr("Tekrar Dene") : QObject::tr("Devam Et");
+}
+
+void MainWindow::updateActionStates() {
+    const QString id = selectedDownloadId();
+    const DownloadItem *item = id.isEmpty() ? NULL : DownloadManager::instance().findItem(id);
+    m_actPause->setEnabled(item != NULL && canPauseItem(*item));
+    m_actResume->setEnabled(item != NULL && canResumeItem(*item));
+    m_actRemove->setEnabled(item != NULL);
+    if (item != NULL && item->m_state == DownloadStateError) {
+        m_actResume->setText(tr("Tekrar Dene [▶]"));
+    } else {
+        m_actResume->setText(tr("Devam Et [▶]"));
+    }
+}
+
 void MainWindow::onPauseClicked() {
     QString id = selectedDownloadId();
     if (!id.isEmpty()) {
@@ -348,6 +476,64 @@ void MainWindow::onResumeClicked() {
     if (!id.isEmpty()) {
         DownloadManager::instance().resumeDownload(id);
     }
+}
+
+void MainWindow::submitDownload(const DownloadItem &item, bool startImmediately) {
+    const int before = DownloadManager::instance().items().size();
+    const QString id = DownloadManager::instance().addDownload(item, startImmediately);
+    if (id.isEmpty()) return;
+    if (DownloadManager::instance().items().size() == before) {
+        // addDownload returned the id of the copy that is already running
+        selectRowById(id);
+        statusBar()->showMessage(tr("Bu bağlantı zaten indiriliyor"), 6000);
+    }
+}
+
+void MainWindow::selectRowById(const QString &id) {
+    int row = findRowById(id);
+    if (row < 0) {
+        // The row may be hidden by the current category filter: show everything
+        m_categoryList->setCurrentRow(0);
+        row = findRowById(id);
+    }
+    if (row >= 0) {
+        m_downloadTable->selectRow(row);
+        m_downloadTable->scrollToItem(m_downloadTable->item(row, 0));
+    }
+}
+
+void MainWindow::showDetails(const QString &id) {
+    DownloadDetailDialog *dlg = new DownloadDetailDialog(id, this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    dlg->show();
+}
+
+void MainWindow::openDownloadedFile(const QString &id) {
+    DownloadItem *item = DownloadManager::instance().findItem(id);
+    if (item == NULL) return;
+    const QString path = item->targetFilePath();
+    if (!QFileInfo::exists(path)) {
+        QMessageBox::warning(this, tr("Dosya Bulunamadı"),
+                             tr("Dosya artık bu konumda değil (taşınmış veya silinmiş olabilir):\n%1").arg(path));
+        return;
+    }
+    QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+}
+
+void MainWindow::showDownloadFolder(const QString &id) {
+    DownloadItem *item = DownloadManager::instance().findItem(id);
+    if (item == NULL) return;
+    const QString dir = item->m_directory;
+    if (dir.isEmpty() || !QFileInfo(dir).isDir()) {
+        QMessageBox::warning(this, tr("Klasör Bulunamadı"),
+                             tr("Klasör artık mevcut değil:\n%1").arg(dir));
+        return;
+    }
+    QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+}
+
+void MainWindow::onEnterPressed() {
+    onTableDoubleClicked(m_downloadTable->currentRow(), 0);
 }
 
 void MainWindow::onRemoveClicked() {
@@ -385,15 +571,21 @@ void MainWindow::removeWithConfirmation(const QString &id) {
     } else if (item->m_state == DownloadStateCancelled) {
         DownloadManager::instance().removeDownload(id, false);
     } else {
-        // D1: Explicit confirmation naming the lost partial data
-        double mb = item->m_receivedBytes / (1024.0 * 1024.0);
-        QString mbStr = QString::number(mb, 'f', 1);
-        QMessageBox::StandardButton reply = QMessageBox::warning(
-            this, tr("Listeden Kaldır"),
-            tr("Kısmen indirilen veri (%1 MB) silinecek. İndirmeyi listeden kaldırmak istediğinizden emin misiniz?").arg(mbStr),
-            QMessageBox::Yes | QMessageBox::Cancel,
-            QMessageBox::Cancel
-        );
+        // D1: Explicit confirmation naming the lost partial data (plain wording when nothing was downloaded)
+        QMessageBox::StandardButton reply;
+        if (item->m_receivedBytes <= 0) {
+            reply = QMessageBox::question(
+                this, tr("Listeden Kaldır"), tr("Listeden kaldırılsın mı?"),
+                QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
+        } else {
+            double mb = item->m_receivedBytes / (1024.0 * 1024.0);
+            QString mbStr = QString::number(mb, 'f', 1);
+            reply = QMessageBox::warning(
+                this, tr("Listeden Kaldır"),
+                tr("Kısmen indirilen veri (%1 MB) silinecek. İndirmeyi listeden kaldırmak istediğinizden emin misiniz?").arg(mbStr),
+                QMessageBox::Yes | QMessageBox::Cancel,
+                QMessageBox::Cancel);
+        }
         if (reply != QMessageBox::Yes) return;
 
         // U4: the download may have completed while the box was open: never delete a finished file
@@ -431,8 +623,16 @@ void MainWindow::onSettingsClicked() {
 void MainWindow::onInstallHostBridgeClicked() {
     QString hostExe = QApplication::applicationDirPath() + "/hbdm-native-host";
     if (QFile::exists(hostExe)) {
-        QProcess::execute(hostExe, QStringList() << "--install");
-        QMessageBox::information(this, tr("Başarılı"), tr("Tarayıcı native host kayıtları başarıyla yüklendi!\nChrome, Opera, Firefox, Brave ve Edge eklentileri artık hazır."));
+        const int rc = QProcess::execute(hostExe, QStringList() << "--install");
+        if (rc == 0) {
+            QMessageBox::information(this, tr("Başarılı"), tr("Tarayıcı native host kayıtları başarıyla yüklendi!\nChrome, Opera, Firefox, Brave ve Edge eklentileri artık hazır."));
+        } else if (rc == -2) {
+            QMessageBox::warning(this, tr("Uyarı"), tr("Native host çalıştırılamadı: %1").arg(hostExe));
+        } else if (rc == -1) {
+            QMessageBox::warning(this, tr("Uyarı"), tr("Native host kurulum sırasında çöktü."));
+        } else {
+            QMessageBox::warning(this, tr("Uyarı"), tr("Native host kurulumu başarısız oldu (çıkış kodu %1).").arg(rc));
+        }
     } else {
         QMessageBox::warning(this, tr("Uyarı"), tr("Native host ikilisi bulunamadı: %1").arg(hostExe));
     }
@@ -450,12 +650,10 @@ void MainWindow::onTableDoubleClicked(int row, int column) {
 
     if (item->m_state == DownloadStateCompleted) {
         // Tamamlanmışsa dosyayı aç
-        QDesktopServices::openUrl(QUrl::fromLocalFile(item->targetFilePath()));
+        openDownloadedFile(id);
     } else {
         // İndiriliyorsa veya duraklatılmışsa detay penceresini aç
-        DownloadDetailDialog *dlg = new DownloadDetailDialog(id, this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        dlg->show();
+        showDetails(id);
     }
 }
 
@@ -469,41 +667,30 @@ void MainWindow::onTableContextMenu(const QPoint &pos) {
     DownloadItem *item = DownloadManager::instance().findItem(id);
     if (item == NULL) return;
 
-    const QString filePath = item->targetFilePath();
-    const QString dirPath = item->m_directory;
     const QString urlText = item->m_url.toString();
-    const bool isActive = item->isActive();
     const DownloadState state = item->m_state;
 
     QMenu menu(this);
-    if (isActive) {
+    if (canPauseItem(*item)) {
         QAction *actPause = menu.addAction(tr("Duraklat"));
         connect(actPause, &QAction::triggered, [id]() { DownloadManager::instance().pauseDownload(id); });
-    } else if (state == DownloadStatePaused || state == DownloadStateError) {
-        QAction *actResume = menu.addAction(tr("Devam Et"));
+    } else if (canResumeItem(*item)) {
+        QAction *actResume = menu.addAction(resumeLabel(*item));
         connect(actResume, &QAction::triggered, [id]() { DownloadManager::instance().resumeDownload(id); });
     }
 
     QAction *actDetail = menu.addAction(tr("İndirme Detaylarını Göster"));
-    connect(actDetail, &QAction::triggered, [this, id]() {
-        DownloadDetailDialog *dlg = new DownloadDetailDialog(id, this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        dlg->show();
-    });
+    connect(actDetail, &QAction::triggered, [this, id]() { showDetails(id); });
 
     menu.addSeparator();
 
     if (state == DownloadStateCompleted) {
         QAction *actOpen = menu.addAction(tr("Dosyayı Aç"));
-        connect(actOpen, &QAction::triggered, [filePath]() {
-            QDesktopServices::openUrl(QUrl::fromLocalFile(filePath));
-        });
+        connect(actOpen, &QAction::triggered, [this, id]() { openDownloadedFile(id); });
     }
 
     QAction *actShowFolder = menu.addAction(tr("Klasörde Göster"));
-    connect(actShowFolder, &QAction::triggered, [dirPath]() {
-        QDesktopServices::openUrl(QUrl::fromLocalFile(dirPath));
-    });
+    connect(actShowFolder, &QAction::triggered, [this, id]() { showDownloadFolder(id); });
 
     QAction *actCopyUrl = menu.addAction(tr("Bağlantıyı Kopyala"));
     connect(actCopyUrl, &QAction::triggered, [urlText]() {
@@ -535,11 +722,13 @@ void MainWindow::onTableContextMenu(const QPoint &pos) {
 
 void MainWindow::onItemAdded(const DownloadItem &item) {
     if (matchesFilter(item)) {
-        int row = m_downloadTable->rowCount();
-        m_downloadTable->insertRow(row);
-        updateTableRow(row, item);
+        // Newest first, the same order the list has after a restart
+        m_downloadTable->insertRow(0);
+        updateTableRow(0, item);
+        m_downloadTable->scrollToTop();
     }
     updateStatusBar();
+    updateActionStates();
 }
 
 void MainWindow::onItemUpdated(const DownloadItem &item) {
@@ -554,18 +743,20 @@ void MainWindow::onItemUpdated(const DownloadItem &item) {
         }
     } else {
         if (match) {
-            int newRow = m_downloadTable->rowCount();
-            m_downloadTable->insertRow(newRow);
-            updateTableRow(newRow, item);
+            m_downloadTable->insertRow(0);
+            updateTableRow(0, item);
         }
     }
 
     updateStatusBar();
+    if (item.m_id == selectedDownloadId()) {
+        updateActionStates();
+    }
 }
 
 void MainWindow::updateStatusBar() {
     int active = DownloadManager::instance().activeCount();
-    m_statusActiveLabel->setText(tr("%1 Aktif İndirme").arg(active));
+    m_statusActiveLabel->setText(tr("%n etkin indirme", "", active));
 
     double totalSpeed = 0.0;
     const QList<DownloadItem> &list = DownloadManager::instance().items();
@@ -589,6 +780,7 @@ void MainWindow::onItemRemoved(const QString &id) {
         m_downloadTable->removeRow(row);
     }
     updateStatusBar();
+    updateActionStates();
 }
 
 void MainWindow::onUrlDetected(const QUrl &url) {
@@ -611,7 +803,7 @@ void MainWindow::processUrlQueue() {
         const QUrl url = m_pendingUrls.dequeue();
         NewDownloadDialog dlg(url, this);
         if (dlg.exec() == QDialog::Accepted) {
-            DownloadManager::instance().addDownload(dlg.downloadItem(), dlg.shouldStartImmediately());
+            submitDownload(dlg.downloadItem(), dlg.shouldStartImmediately());
         }
         // U3: a cancelled dialog must not block the same clipboard URL forever
         ClipboardWatcher::resetLastUrl();
@@ -650,6 +842,7 @@ void MainWindow::closeEvent(QCloseEvent *event) {
         // Sistem tepsisi varsa pencereyi gizle, arka planda çalışmaya devam et
         hide();
         event->ignore();
+        emit atHiddenToTray();
     } else {
         // Sistem tepsisi yoksa kapatma uygulamadan çıkış anlamına gelir
         if (DownloadManager::instance().activeCount() > 0) {

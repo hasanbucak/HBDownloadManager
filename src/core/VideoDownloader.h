@@ -42,6 +42,9 @@ private:
     QString createCookieFile();
     void signalProcessGroup(int sig);
     void stopProcess(bool cancelled);
+    // Records a file yt-dlp writes; returns true when it is a new one for this run
+    bool noteDestination(const QString &path, bool ownFile);
+    void addTempPath(const QString &path);
 
     DownloadItem m_item;
     QProcess *m_process;
@@ -52,6 +55,7 @@ private:
     qint64 m_videoTotalBytes;
     qint64 m_audioTotalBytes;
     bool m_isAudioPhase;
+    QStringList m_runDestinations;
     QStringList m_recentOutputLines;
     QString m_fileMarker;
     bool m_stopRequested;

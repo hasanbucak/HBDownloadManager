@@ -5,6 +5,7 @@
 #include <QStandardPaths>
 #include <QStringList>
 #include <QRegularExpression>
+#include <QCoreApplication>
 
 DownloadItem::DownloadItem()
     : m_id(QUuid::createUuid().toString(QUuid::WithoutBraces)),
@@ -17,6 +18,8 @@ DownloadItem::DownloadItem()
       m_requestedSegments(8),
       m_originalUrl(),
       m_etag(),
+      m_fileNameExplicit(false),
+      m_resumeOnStart(false),
       m_speed(0.0),
       m_videoPercent(0.0),
       m_lastReceived(0),
@@ -38,6 +41,8 @@ DownloadItem::DownloadItem(const QUrl &url, const QString &dir)
       m_requestedSegments(8),
       m_originalUrl(url),
       m_etag(),
+      m_fileNameExplicit(false),
+      m_resumeOnStart(false),
       m_speed(0.0),
       m_videoPercent(0.0),
       m_lastReceived(0),
@@ -101,7 +106,18 @@ static QString formatBytes(qint64 bytes) {
 
 QString DownloadItem::formattedSize() const {
     if (m_totalBytes > 0) {
-        return QString("%1 / %2").arg(formatBytes(m_receivedBytes), formatBytes(m_totalBytes));
+        // Finished: the size alone. Running: "2.17 / 28.61 MB" (one unit when both share it),
+        // short enough that the file name keeps the room in the list.
+        if (m_state == DownloadStateCompleted || m_receivedBytes >= m_totalBytes) {
+            return formatBytes(m_totalBytes);
+        }
+        const QString done = formatBytes(m_receivedBytes);
+        const QString total = formatBytes(m_totalBytes);
+        const QString doneUnit = done.section(' ', 1);
+        if (!doneUnit.isEmpty() && doneUnit == total.section(' ', 1)) {
+            return QString("%1 / %2").arg(done.section(' ', 0, 0), total);
+        }
+        return QString("%1 / %2").arg(done, total);
     }
     return formatBytes(m_receivedBytes);
 }
@@ -115,9 +131,9 @@ QString DownloadItem::formattedEta() const {
     if (!isActive()) return "--";
     qint64 secs = etaSeconds();
     if (secs < 0) return "--";
-    if (secs < 60) return QString("%1 sn").arg(secs);
-    if (secs < 3600) return QString("%1 dk %2 sn").arg(secs / 60).arg(secs % 60);
-    return QString("%1 sa %2 dk").arg(secs / 3600).arg((secs % 3600) / 60);
+    if (secs < 60) return QCoreApplication::translate("DownloadItem", "%1 sn").arg(secs);
+    if (secs < 3600) return QCoreApplication::translate("DownloadItem", "%1 dk %2 sn").arg(secs / 60).arg(secs % 60);
+    return QCoreApplication::translate("DownloadItem", "%1 sa %2 dk").arg(secs / 3600).arg((secs % 3600) / 60);
 }
 
 QString DownloadItem::partFilePath() const {
@@ -223,6 +239,13 @@ QJsonObject DownloadItem::toJson() const {
     obj["quality"] = m_quality;
     obj["originalUrl"] = m_originalUrl.toString();
     obj["etag"] = m_etag;
+    obj["fileNameExplicit"] = m_fileNameExplicit;
+    if (!m_tempPaths.isEmpty()) {
+        obj["tempPaths"] = QJsonArray::fromStringList(m_tempPaths);
+    }
+    if (m_resumeOnStart) {
+        obj["resumeOnStart"] = true;
+    }
     obj["cookieHeader"] = m_cookieHeader;
     obj["cookies"] = m_cookies;
 
@@ -265,9 +288,20 @@ DownloadItem DownloadItem::fromJson(const QJsonObject &obj) {
     item.m_videoPercent = obj["videoPercent"].toDouble(0.0);
     item.m_quality = obj["quality"].toString("best");
 
+    // Items without the key predate the flag: keep their name as it is
+    item.m_fileNameExplicit = obj["fileNameExplicit"].toBool(true);
+    const QJsonArray tempArray = obj["tempPaths"].toArray();
+    for (int i = 0; i < tempArray.size(); ++i) {
+        const QString p = tempArray.at(i).toString();
+        if (!p.isEmpty()) item.m_tempPaths.append(p);
+    }
+
+    // A clean quit marks what was running or queued: it goes back into the queue. A state file left
+    // by a crash still says "downloading": that one waits paused (no restart loop on a bad item).
     QString st = obj["state"].toString();
+    const bool resume = obj["resumeOnStart"].toBool(false);
     if (st == "downloading" || st == "probing") item.m_state = DownloadStatePaused;
-    else if (st == "paused") item.m_state = DownloadStatePaused;
+    else if (st == "paused") item.m_state = resume ? DownloadStateQueued : DownloadStatePaused;
     else if (st == "completed") item.m_state = DownloadStateCompleted;
     else if (st == "failed") item.m_state = DownloadStateError;
     else if (st == "cancelled") item.m_state = DownloadStateCancelled;

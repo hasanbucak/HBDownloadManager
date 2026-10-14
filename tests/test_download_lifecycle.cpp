@@ -29,6 +29,10 @@ private slots:
     void testRemoveErrorItemDeletesPart();
     void testCompletedFinalFileOutsideFolderIsKept();
     void testRemoveCompletedWithoutDeleteFileKeepsFinalFile();
+    void testDuplicateInFlightLinkReturnsExistingId();
+    void testSameLinkAllowedAgainWhenNotInFlight();
+    void testDeleteFileKeepsFileSharedWithAnotherEntry();
+    void testRemoveUnfinishedVideoCleansYtDlpFiles();
 };
 
 void TestDownloadLifecycle::initTestCase() {
@@ -413,4 +417,116 @@ void TestDownloadLifecycle::testRemoveCompletedWithoutDeleteFileKeepsFinalFile()
 // re-run in one process; there is no test for it here.
 
 QTEST_MAIN(TestDownloadLifecycle)
+void TestDownloadLifecycle::testDuplicateInFlightLinkReturnsExistingId() {
+    DownloadManager &dm = DownloadManager::instance();
+    DownloadItem item(QUrl(QStringLiteral("http://127.0.0.1:9/dup-inflight.bin")));
+    item.m_kind = DownloadKindFile;
+    const QString first = dm.addDownload(item, true);   // queued or running: in flight
+    const int count = dm.items().size();
+
+    DownloadItem again(QUrl(QStringLiteral("http://127.0.0.1:9/dup-inflight.bin")));
+    again.m_kind = DownloadKindFile;
+    const QString second = dm.addDownload(again, true);
+    QCOMPARE(second, first);
+    QCOMPARE(dm.items().size(), count);
+
+    dm.removeDownload(first, false);
+}
+
+void TestDownloadLifecycle::testSameLinkAllowedAgainWhenNotInFlight() {
+    DownloadManager &dm = DownloadManager::instance();
+    DownloadItem item(QUrl(QStringLiteral("http://127.0.0.1:9/dup-later.bin")));
+    item.m_kind = DownloadKindFile;
+    const QString first = dm.addDownload(item, false);  // "download later": paused, not in flight
+
+    DownloadItem again(QUrl(QStringLiteral("http://127.0.0.1:9/dup-later.bin")));
+    again.m_kind = DownloadKindFile;
+    const QString second = dm.addDownload(again, false);
+    QVERIFY(second != first);
+
+    dm.removeDownload(first, false);
+    dm.removeDownload(second, false);
+}
+
+void TestDownloadLifecycle::testDeleteFileKeepsFileSharedWithAnotherEntry() {
+    DownloadManager &dm = DownloadManager::instance();
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString shared = QDir(dir.path()).filePath(QStringLiteral("video.mp4"));
+    QFile f(shared);
+    QVERIFY(f.open(QIODevice::WriteOnly));
+    f.write("data");
+    f.close();
+
+    QStringList ids;
+    for (int i = 0; i < 2; ++i) {
+        DownloadItem item(QUrl(QStringLiteral("http://127.0.0.1:9/v%1").arg(i)), dir.path());
+        item.m_kind = DownloadKindVideo;
+        item.m_fileName = QStringLiteral("video.mp4");
+        item.m_finalPath = shared;
+        ids << dm.addDownload(item, false);
+        DownloadItem *added = dm.findItem(ids.last());
+        QVERIFY(added != NULL);
+        added->m_state = DownloadStateCompleted;
+    }
+
+    dm.removeDownload(ids.at(0), true);
+    QVERIFY2(QFile::exists(shared), "the other entry still points to this file");
+    dm.removeDownload(ids.at(1), true);
+    QVERIFY(!QFile::exists(shared));
+}
+
+void TestDownloadLifecycle::testRemoveUnfinishedVideoCleansYtDlpFiles() {
+    DownloadManager &dm = DownloadManager::instance();
+    QTemporaryDir dir;
+    QTemporaryDir outsideDir;
+    QVERIFY(dir.isValid() && outsideDir.isValid());
+    const QDir d(dir.path());
+    // Brackets on purpose: a name filter would read "[360p]" as a character class
+    const QStringList leftovers = QStringList()
+        << QStringLiteral("Clip [360p].f0.mp4")
+        << QStringLiteral("Clip [360p].f0.mp4.part")
+        << QStringLiteral("Clip [360p].f1.m4a.part")
+        << QStringLiteral("Clip [360p].f1.m4a.part-Frag3.part")
+        << QStringLiteral("Clip [360p].f1.m4a.ytdl")
+        << QStringLiteral("Clip [360p].temp.mp4");
+    const QStringList keep = QStringList()
+        << QStringLiteral("other.mp4")
+        << QStringLiteral("Clip [360p].f0.mp4.notes.txt")
+        << QStringLiteral("Clip [360p].final.pdf")
+        << QStringLiteral("Clip [360p].f2.txt")
+        << QStringLiteral("my.file.mp4.part");
+    QStringList all = leftovers + keep;
+    for (int i = 0; i < all.size(); ++i) {
+        QFile f(d.filePath(all.at(i)));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("x");
+    }
+    // A path outside the download folder in the list must never be touched
+    const QString outsideFile = QDir(outsideDir.path()).filePath(QStringLiteral("Clip.f9.mp4"));
+    {
+        QFile f(outsideFile);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("x");
+    }
+
+    DownloadItem item(QUrl(QStringLiteral("http://127.0.0.1:9/clip.mpd")), dir.path());
+    item.m_kind = DownloadKindVideo;
+    // The audio format (.f1) is NOT recorded: yt-dlp was stopped before its "Destination" line
+    // arrived. It must still go, as a sibling format file of the recorded .f0.
+    item.m_tempPaths << d.filePath(QStringLiteral("Clip [360p].f0.mp4"))
+                     << d.filePath(QStringLiteral("Clip [360p].mp4"))
+                     << outsideFile;
+    const QString id = dm.addDownload(item, false);
+    dm.removeDownload(id, false);
+
+    for (int i = 0; i < leftovers.size(); ++i) {
+        QVERIFY2(!QFile::exists(d.filePath(leftovers.at(i))), qPrintable(leftovers.at(i)));
+    }
+    for (int i = 0; i < keep.size(); ++i) {
+        QVERIFY2(QFile::exists(d.filePath(keep.at(i))), qPrintable(keep.at(i)));
+    }
+    QVERIFY(QFile::exists(outsideFile));
+}
+
 #include "test_download_lifecycle.moc"

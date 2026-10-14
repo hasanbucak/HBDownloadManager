@@ -43,5 +43,6 @@ private:
 
     QPushButton *m_pauseResumeBtn;
     QPushButton *m_cancelBtn;
+    QPushButton *m_closeBtn;
     QCheckBox *m_autoCloseCheck;
 };

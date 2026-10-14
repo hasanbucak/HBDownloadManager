@@ -6,6 +6,7 @@
 #include <QApplication>
 #include <QIcon>
 #include <QMessageBox>
+#include <QSettings>
 
 TrayManager::TrayManager(MainWindow *mainWindow, QObject *parent)
     : QObject(parent),
@@ -28,6 +29,8 @@ TrayManager::TrayManager(MainWindow *mainWindow, QObject *parent)
 
     connect(m_trayIcon, SIGNAL(activated(QSystemTrayIcon::ActivationReason)),
             this, SLOT(onTrayIconActivated(QSystemTrayIcon::ActivationReason)));
+
+    connect(m_mainWindow, SIGNAL(atHiddenToTray()), this, SLOT(onHiddenToTray()));
 
     connect(&DownloadManager::instance(), SIGNAL(atItemCompleted(DownloadItem)),
             this, SLOT(onItemCompleted(DownloadItem)));
@@ -113,6 +116,19 @@ void TrayManager::onQuitClicked() {
     DownloadManager::instance().pauseAll();
     QCoreApplication::instance()->setProperty("hbdmQuitting", true);
     QCoreApplication::exit(0);  // quit() may be refused by closeEvent in Qt 6
+}
+
+void TrayManager::onHiddenToTray() {
+    if (!QSystemTrayIcon::isSystemTrayAvailable() || !m_trayIcon->isVisible()) return;
+    QSettings settings("HasanBucak", "hb-download-manager");
+    if (settings.value("ui/trayHintShown", false).toBool()) return;
+    m_trayIcon->showMessage(
+        tr("HB Download Manager çalışmaya devam ediyor"),
+        tr("Pencereyi kapatmak uygulamayı kapatmaz; indirmeler arka planda sürer. Tamamen çıkmak için tepsi simgesinden \"Çıkış\" seçin."),
+        QSystemTrayIcon::Information,
+        6000
+    );
+    settings.setValue("ui/trayHintShown", true);
 }
 
 void TrayManager::onItemCompleted(const DownloadItem &item) {

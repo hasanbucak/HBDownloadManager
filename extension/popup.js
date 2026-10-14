@@ -2,6 +2,8 @@
 const api = typeof browser !== 'undefined' ? browser : chrome;
 const $ = (id) => document.getElementById(id);
 const t = (k, subs) => { try { return api.i18n.getMessage(k, subs) || k; } catch { return k; } };
+// Localized text for a background reply that is not ok (the background maps its error codes)
+const errText = (r) => (r && r.message) || t('errNoAnswer');
 
 document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n); });
 document.documentElement.lang = (() => { try { return api.i18n.getUILanguage(); } catch { return 'en'; } })();
@@ -25,6 +27,7 @@ function fmtSize(n) {
 }
 
 let tab = null;
+let currentPort = 48213;
 
 async function currentTab() {
   const tabs = await api.tabs.query({ active: true, currentWindow: true });
@@ -35,15 +38,19 @@ async function refresh() {
   const st = await send({ type: 'status' });
   const online = !!(st && st.online);
   $('dot').classList.toggle('on', online);
+  // The app answered but its proof did not check out: that is not "not running"
+  const unverified = !online && !!st && (st.authState === 'mismatch' || st.authState === 'unverified');
   $('statusText').textContent = online
     ? t('popupConnected', [String(st.app.version)]) + (st.app.active ? ` · ${t('popupActive', [String(st.app.active)])}` : '')
-    : t('popupOffline');
+    : (unverified ? t('popupUnverified') : t('popupOffline'));
   $('offline').classList.toggle('hidden', online);
-  $('launch').classList.toggle('hidden', !(st && st.canLaunch));
+  $('offlineText').textContent = unverified ? t('popupAuthMismatch') : t('popupOfflineBox');
+  $('launch').classList.toggle('hidden', unverified || !(st && st.canLaunch));
   if (st && st.settings) {
     $('intercept').checked = !!st.settings.intercept;
     $('sniff').checked = !!st.settings.sniff;
     $('autoLaunch').checked = st.settings.autoLaunch !== false;
+    currentPort = st.settings.port;
     $('port').value = st.settings.port;
     $('minSize').value = st.settings.minSizeMB || 0;
   }
@@ -69,7 +76,8 @@ async function loadMedia() {
       btn.disabled = true; btn.textContent = '…';
       const k = m.kind === 'hls' || m.kind === 'dash' ? 'video' : 'file';
       const r = await send({ type: 'download', url: m.url, filename: k === 'file' ? m.name : '', referer: tab.url, kind: k });
-      btn.textContent = r && r.ok ? t('popupSent') : t('popupError');
+      btn.textContent = r && r.ok ? (r.duplicate ? t('msgDuplicate') : t('popupSent')) : t('popupError');
+      if (!(r && r.ok)) btn.title = errText(r);
     };
     li.append(info, btn);
     ul.appendChild(li);
@@ -130,11 +138,14 @@ function updateRow(d) {
     parts.push(d.stage && active ? d.stage : t(STATE_LABEL[d.state] || d.state));
     if (d.state === 'failed' && d.error) parts.push(d.error);
   }
-  li.querySelector('.meta').textContent = parts.join(' · ');
+  const metaEl = li.querySelector('.meta');
+  metaEl.textContent = parts.join(' · ');
+  metaEl.title = d.state === 'failed' && d.error ? d.error : '';
   const toggle = li.querySelector('.toggle'), cancel = li.querySelector('.cancel');
   const terminal = d.state === 'completed' || d.state === 'failed' || d.state === 'cancelled';
   toggle.classList.toggle('hidden', terminal);
   if (active) { toggle.textContent = '❚❚'; toggle.title = t('popupPause'); toggle.dataset.action = 'pause'; }
+  else if (d.state === 'queued') { toggle.textContent = '⏳'; toggle.title = t('popupPause'); toggle.dataset.action = 'pause'; }
   else { toggle.textContent = '▶'; toggle.title = t('popupResume'); toggle.dataset.action = 'resume'; }
   cancel.dataset.action = terminal ? 'remove' : 'cancel';
   cancel.title = terminal ? t('popupRemove') : t('popupCancel');
@@ -147,16 +158,32 @@ $('pageVideo').onclick = async () => {
   const kind = quality === 'audio' ? 'audio' : 'video';
   $('pageVideo').textContent = t('popupSending');
   const r = await send({ type: 'download', url: tab.url, referer: tab.url, kind: kind, quality: quality });
-  $('pageVideo').textContent = r && r.ok ? t('popupStarted') : t('popupFailed');
+  $('pageVideo').textContent = r && r.ok ? (r.duplicate ? t('msgDuplicate') : t('popupStarted')) : t('popupFailed');
+  $('pageVideo').title = r && r.ok ? '' : errText(r);
   loadDownloads();
   setTimeout(() => ($('pageVideo').textContent = t('popupPageVideo')), 2500);
 };
 $('pageLink').onclick = async () => {
   tab = tab || (await currentTab());
   if (!tab?.url) return;
-  await send({ type: 'download', url: tab.url, referer: tab.url, kind: 'file' });
-  window.close();
+  $('pageLink').textContent = t('popupSending');
+  const r = await send({ type: 'download', url: tab.url, referer: tab.url, kind: 'file' });
+  $('pageLink').textContent = r && r.ok ? (r.duplicate ? t('msgDuplicate') : t('popupSent')) : t('popupFailed');
+  $('pageLink').title = r && r.ok ? '' : errText(r);
+  if (r && r.ok) {
+    // Leave the confirmation visible for a moment before the popup closes
+    setTimeout(() => window.close(), 900);
+  } else {
+    setTimeout(() => ($('pageLink').textContent = t('popupPageLink')), 2500);
+  }
 };
+// Remember the chosen quality between popup openings
+try { api.storage.local.get('videoQuality').then(applyQuality, () => {}); } catch {}
+function applyQuality(r) {
+  const q = r && r.videoQuality;
+  if (q && [...$('videoQuality').options].some((o) => o.value === q)) $('videoQuality').value = q;
+}
+$('videoQuality').onchange = (e) => { try { api.storage.local.set({ videoQuality: e.target.value }); } catch {} };
 $('launch').onclick = async () => {
   await send({ type: 'launchApp' });
   setTimeout(refresh, 1500);
@@ -164,7 +191,18 @@ $('launch').onclick = async () => {
 $('intercept').onchange = (e) => send({ type: 'setSettings', settings: { intercept: e.target.checked } });
 $('sniff').onchange = (e) => send({ type: 'setSettings', settings: { sniff: e.target.checked } });
 $('autoLaunch').onchange = (e) => send({ type: 'setSettings', settings: { autoLaunch: e.target.checked } });
-$('port').onchange = (e) => send({ type: 'setSettings', settings: { port: parseInt(e.target.value, 10) || 48213 } }).then(refresh);
+$('port').onchange = (e) => {
+  const v = parseInt(e.target.value, 10);
+  if (!(v >= 1024 && v <= 65535)) {
+    // Keep the previous value instead of silently resetting to the default
+    e.target.value = currentPort;
+    $('portHint').classList.remove('hidden');
+    setTimeout(() => $('portHint').classList.add('hidden'), 4000);
+    return;
+  }
+  $('portHint').classList.add('hidden');
+  send({ type: 'setSettings', settings: { port: v } }).then(refresh);
+};
 $('minSize').onchange = (e) => send({ type: 'setSettings', settings: { minSizeMB: parseInt(e.target.value, 10) || 0 } });
 
 refresh();

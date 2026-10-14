@@ -26,6 +26,8 @@ private slots:
     void onPauseAllClicked();
     void onResumeAllClicked();
     void onQuitClicked();
+    // One-time balloon explaining that closing the window keeps the app in the tray
+    void onHiddenToTray();
 
     void onItemCompleted(const DownloadItem &item);
     void onItemFailed(const DownloadItem &item, const QString &error);

@@ -33,3 +33,4 @@ summary { cursor: pointer; color: var(--muted); }
 @keyframes slide { from { margin-left: -30%; } to { margin-left: 100%; } }
 li .actions { display: flex; gap: 4px; }
 button.icon { width: 28px; margin: 0; padding: 3px 0; font-size: 12px; line-height: 1.2; }
+.hint { color: #c33; font-size: 11px; margin: 2px 0 0; }

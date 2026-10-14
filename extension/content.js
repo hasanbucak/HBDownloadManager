@@ -6,6 +6,9 @@
 (() => {
   'use strict';
   const api = typeof browser !== 'undefined' ? browser : chrome;
+  const t = (k, subs) => { try { return api.i18n.getMessage(k, subs) || k; } catch { return k; } };
+  // Localized text for a background reply that is not ok (the background maps its error codes)
+  const errText = (r) => (r && r.message) || t('errNoAnswer');
   const DL_EXT = /\.(zip|rar|7z|tar|gz|tgz|bz2|xz|dmg|pkg|iso|exe|msi|apk|deb|rpm|pdf|epub|mobi|doc|docx|xls|xlsx|ppt|pptx|mp4|mkv|avi|mov|webm|mp3|flac|wav|m4a|aac|ogg|jar|bin|img|csv|psd|ai|ttf|otf|woff2?)(\?|#|$)/i;
 
   let state = { online: false, clickIntercept: false, settings: { intercept: true } };
@@ -350,11 +353,11 @@
     if (h >= 4320) return { icon: '👑', label: '8K Ultra HD', badge: '8K UHD' };
     if (h >= 2160) return { icon: '🌟', label: '4K Ultra HD', badge: '4K UHD' };
     if (h >= 1440) return { icon: '🎬', label: '2K Quad HD', badge: '1440p QHD' };
-    if (h >= 1080) return { icon: '🎬', label: 'Full HD Kalite', badge: '1080p FHD' };
-    if (h >= 720)  return { icon: '📺', label: 'HD Kalite', badge: '720p HD' };
-    if (h >= 480)  return { icon: '📱', label: 'Standart Kalite', badge: '480p' };
-    if (h >= 360)  return { icon: '📱', label: 'Düşük Kalite', badge: '360p' };
-    return { icon: '📱', label: `${h}p Kalite`, badge: `${h}p` };
+    if (h >= 1080) return { icon: '🎬', label: t('qFullHd'), badge: '1080p FHD' };
+    if (h >= 720)  return { icon: '📺', label: t('qHd'), badge: '720p HD' };
+    if (h >= 480)  return { icon: '📱', label: t('qStandard'), badge: '480p' };
+    if (h >= 360)  return { icon: '📱', label: t('qLow'), badge: '360p' };
+    return { icon: '📱', label: t('qOther', [String(h)]), badge: `${h}p` };
   }
 
   function getVideoScore(f) {
@@ -463,7 +466,7 @@
           quality: 'best',
           estimatedBytes: maxTotal,
           icon: '🌟',
-          label: `En Yüksek Kalite (${maxMeta.badge})`,
+          label: t('qBestWith', [maxMeta.badge]),
           badge: maxSizeStr ? '~' + maxSizeStr : maxMeta.badge
         }));
         menu.appendChild(createMenuDivider());
@@ -492,24 +495,24 @@
         quality: 'audio',
         estimatedBytes: bestAudioBytes,
         icon: '🎵',
-        label: 'Sadece Sesi İndir',
+        label: t('qAudioOnly'),
         badge: bestAudioBytes ? '~' + formatBytes(bestAudioBytes) : 'MP3'
       }));
       menu.appendChild(createMenuItem({
         action: 'copy',
         icon: '📋',
-        label: 'Video Bağlantısını Kopyala'
+        label: t('qCopyLink')
       }));
       return;
     }
 
-    menu.appendChild(createMenuItem({ action: 'download', quality: 'best', icon: '🌟', label: 'En Yüksek Kalite', badge: 'Otomatik' }));
-    menu.appendChild(createMenuItem({ action: 'download', quality: '1080', icon: '🎬', label: 'Full HD Kalite', badge: '1080p MP4' }));
-    menu.appendChild(createMenuItem({ action: 'download', quality: '720', icon: '📺', label: 'HD Kalite', badge: '720p MP4' }));
-    menu.appendChild(createMenuItem({ action: 'download', quality: '480', icon: '📱', label: 'Standart Kalite', badge: '480p MP4' }));
+    menu.appendChild(createMenuItem({ action: 'download', quality: 'best', icon: '🌟', label: t('qBest'), badge: t('qAuto') }));
+    menu.appendChild(createMenuItem({ action: 'download', quality: '1080', icon: '🎬', label: t('qFullHd'), badge: '1080p MP4' }));
+    menu.appendChild(createMenuItem({ action: 'download', quality: '720', icon: '📺', label: t('qHd'), badge: '720p MP4' }));
+    menu.appendChild(createMenuItem({ action: 'download', quality: '480', icon: '📱', label: t('qStandard'), badge: '480p MP4' }));
     menu.appendChild(createMenuDivider());
-    menu.appendChild(createMenuItem({ action: 'download-audio', quality: 'audio', icon: '🎵', label: 'Sadece Sesi İndir', badge: 'MP3' }));
-    menu.appendChild(createMenuItem({ action: 'copy', icon: '📋', label: 'Video Bağlantısını Kopyala' }));
+    menu.appendChild(createMenuItem({ action: 'download-audio', quality: 'audio', icon: '🎵', label: t('qAudioOnly'), badge: 'MP3' }));
+    menu.appendChild(createMenuItem({ action: 'copy', icon: '📋', label: t('qCopyLink') }));
   }
 
   function createOverlay(video, player) {
@@ -529,18 +532,22 @@
     // Main download button
     const mainBtn = document.createElement('div');
     mainBtn.className = 'hbdm-btn-main';
-    mainBtn.title = 'Bu videoyu HB Download Manager ile indir';
+    mainBtn.title = t('ovMainTitle');
     mainBtn.innerHTML = `
       <svg class="hbdm-icon" viewBox="0 0 24 24">
         <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/>
       </svg>
-      <span class="hbdm-text">Bu Videoyu İndir</span>
+      <span class="hbdm-text"></span>
     `;
+
+    // The resting label is stored once; transient states ("Sending...") must never be captured as the original
+    const LABEL = t('ovLabel');
+    mainBtn.querySelector('.hbdm-text').textContent = LABEL;
 
     // Dropdown arrow toggle
     const toggle = document.createElement('div');
     toggle.className = 'hbdm-toggle';
-    toggle.title = 'Kalite Seçenekleri (4K, 1440p, 1080p, 720p, MP3)';
+    toggle.title = t('ovQualityTitle');
     toggle.innerHTML = `
       <svg class="hbdm-arrow" viewBox="0 0 24 24">
         <path d="M7 10l5 5 5-5z"/>
@@ -556,13 +563,15 @@
     bar.appendChild(menu);
     shadow.appendChild(bar);
 
+    let resetTimer = null;
     function setSuccessState(text) {
-      const origText = mainBtn.querySelector('.hbdm-text').textContent;
       bar.classList.add('hbdm-success');
       mainBtn.querySelector('.hbdm-text').textContent = text;
-      setTimeout(() => {
+      if (resetTimer) clearTimeout(resetTimer);
+      resetTimer = setTimeout(() => {
+        resetTimer = null;
         bar.classList.remove('hbdm-success');
-        mainBtn.querySelector('.hbdm-text').textContent = origText;
+        mainBtn.querySelector('.hbdm-text').textContent = LABEL;
       }, 3000);
     }
 
@@ -570,7 +579,9 @@
       menu.classList.remove('hbdm-open');
       host.classList.remove('hbdm-menu-open');
       const url = getCanonicalVideoUrl(video);
-      mainBtn.querySelector('.hbdm-text').textContent = '⏳ Gönderiliyor...';
+      if (resetTimer) { clearTimeout(resetTimer); resetTimer = null; }
+      bar.classList.remove('hbdm-success');
+      mainBtn.querySelector('.hbdm-text').textContent = t('ovSending');
       send({
         type: 'download',
         url: url,
@@ -580,11 +591,12 @@
         quality: quality || 'best',
         estimatedBytes: estimatedBytes || 0
       }).then((r) => {
-        if (r && r.ok) {
-          setSuccessState(kind === 'audio' ? '✓ Ses İndiriliyor...' : '✓ İndirmeye Gönderildi!');
+        if (r && r.ok && r.duplicate) {
+          setSuccessState('ℹ️ ' + t('msgDuplicate'));
+        } else if (r && r.ok) {
+          setSuccessState(kind === 'audio' ? t('ovSentAudio') : t('ovSentVideo'));
         } else {
-          const errMsg = (r && r.error) ? r.error : 'Bağlantı hatası';
-          setSuccessState('⚠️ ' + errMsg);
+          setSuccessState('⚠️ ' + errText(r));
         }
       });
     }
@@ -605,7 +617,7 @@
             const url = getCanonicalVideoUrl(video);
             try {
               navigator.clipboard.writeText(url);
-              setSuccessState('✓ Bağlantı Kopyalandı!');
+              setSuccessState(t('ovCopied'));
             } catch {}
             menu.classList.remove('hbdm-open');
             host.classList.remove('hbdm-menu-open');
@@ -771,21 +783,36 @@
 
       const btn = document.createElement('div');
       btn.className = 'hbdm-x-action-btn';
-      btn.title = 'Videoyu HB Download Manager ile İndir';
+      btn.title = t('xBtnTitle');
       btn.style.cssText = 'display: inline-flex; align-items: center; margin-left: 8px; cursor: pointer; color: #1d9bf0; font-size: 13px; font-weight: 600; padding: 4px 10px; border-radius: 9999px; background: rgba(29, 155, 240, 0.12); transition: background 0.2s, transform 0.15s; user-select: none; z-index: 10;';
-      btn.innerHTML = `
-        <svg viewBox="0 0 24 24" style="width: 16px; height: 16px; fill: currentColor; margin-right: 5px;">
-          <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/>
-        </svg>
-        <span>İndir</span>
-      `;
+      const ICON_PATH = 'M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z';
+      const CHECK_PATH = 'M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z';
+      const WARN_PATH = 'M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z';
+      // Built with DOM calls (not innerHTML) because the label text comes from the locale files
+      const setBtn = (path, color, text, bg) => {
+        btn.textContent = '';
+        const NS = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(NS, 'svg');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        svg.style.cssText = 'width: 16px; height: 16px; margin-right: 5px; fill: ' + (color || 'currentColor') + ';';
+        const pathEl = document.createElementNS(NS, 'path');
+        pathEl.setAttribute('d', path);
+        svg.appendChild(pathEl);
+        const label = document.createElement('span');
+        label.textContent = text;
+        if (color) label.style.color = color;
+        btn.append(svg, label);
+        btn.style.background = bg;
+      };
+      const REST_BG = 'rgba(29, 155, 240, 0.12)';
+      setBtn(ICON_PATH, null, t('xBtnLabel'), REST_BG);
 
       btn.addEventListener('mouseenter', () => {
         btn.style.background = 'rgba(29, 155, 240, 0.22)';
         btn.style.transform = 'scale(1.05)';
       });
       btn.addEventListener('mouseleave', () => {
-        btn.style.background = 'rgba(29, 155, 240, 0.12)';
+        btn.style.background = REST_BG;
         btn.style.transform = 'none';
       });
 
@@ -796,17 +823,13 @@
         });
       });
 
+      let xTimer = null;
       btn.addEventListener('click', (e) => {
         if (!e.isTrusted) return;
         e.stopPropagation();
         e.preventDefault();
-        btn.innerHTML = `
-          <svg viewBox="0 0 24 24" style="width: 16px; height: 16px; fill: #00ba7c; margin-right: 5px;">
-            <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
-          </svg>
-          <span style="color: #00ba7c;">İndiriliyor...</span>
-        `;
-        btn.style.background = 'rgba(0, 186, 124, 0.18)';
+        if (xTimer) clearTimeout(xTimer);
+        setBtn(ICON_PATH, null, t('ovSending'), 'rgba(29, 155, 240, 0.18)');
         send({
           type: 'download',
           url: tweetUrl,
@@ -815,16 +838,21 @@
           kind: 'video',
           quality: 'best',
           estimatedBytes: 0
+        }).then((r) => {
+          if (r && r.ok) {
+            setBtn(CHECK_PATH, '#00ba7c', r.duplicate ? t('msgDuplicate') : t('xBtnSent'), 'rgba(0, 186, 124, 0.18)');
+            btn.title = t('xBtnTitle');
+          } else {
+            const msg = errText(r);
+            setBtn(WARN_PATH, '#f4212e', t('xBtnFailed'), 'rgba(244, 33, 46, 0.15)');
+            btn.title = msg;
+          }
+          xTimer = setTimeout(() => {
+            xTimer = null;
+            setBtn(ICON_PATH, null, t('xBtnLabel'), REST_BG);
+            btn.title = t('xBtnTitle');
+          }, 3000);
         });
-        setTimeout(() => {
-          btn.innerHTML = `
-            <svg viewBox="0 0 24 24" style="width: 16px; height: 16px; fill: currentColor; margin-right: 5px;">
-              <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/>
-            </svg>
-            <span>İndir</span>
-          `;
-          btn.style.background = 'rgba(29, 155, 240, 0.12)';
-        }, 3000);
       });
 
       group.appendChild(btn);

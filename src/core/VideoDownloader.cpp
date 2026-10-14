@@ -197,6 +197,7 @@ void VideoDownloader::start() {
     m_videoTotalBytes = 0;
     m_audioTotalBytes = 0;
     m_isAudioPhase = false;
+    m_runDestinations.clear();
     m_recentOutputLines.clear();
     m_finalPath.clear();
     m_stopRequested = false;
@@ -217,7 +218,8 @@ void VideoDownloader::start() {
     } else if (heightNum > 0) {
         qualityTag = QString(" [%1p]").arg(heightNum);
     } else {
-        qualityTag = " [%(height)sp]";
+        // Only when yt-dlp knows the height; a bare "[NAp]" otherwise
+        qualityTag = "%(height& [{}p]|)s";
     }
 
     QString outputTemplate = QDir(m_item.m_directory).filePath("%(title)s" + qualityTag + ".%(ext)s");
@@ -424,13 +426,10 @@ void VideoDownloader::parseOutputLine(const QString &line) {
 
             if (parts.size() >= 7 && !parts[6].isEmpty() && parts[6] != "NA") {
                 m_finalPath = parts[6].trimmed();
-                if (m_finalPath.endsWith(".m4a") || m_finalPath.endsWith(".opus") || m_finalPath.endsWith(".mp3") ||
-                    m_finalPath.contains(".f140") || m_finalPath.contains(".f249") || m_finalPath.contains(".f250") || m_finalPath.contains(".f251") ||
-                    (m_videoTotalBytes > 0 && m_item.m_kind != DownloadKindAudio)) {
-                    m_isAudioPhase = true;
+                if (noteDestination(m_finalPath, true)) {
+                    m_item.m_fileName = QFileInfo(m_finalPath).fileName();
+                    emit atTitleDetected(m_item.m_fileName);
                 }
-                m_item.m_fileName = QFileInfo(m_finalPath).fileName();
-                emit atTitleDetected(m_item.m_fileName);
             }
 
             if (m_isAudioPhase && m_item.m_kind != DownloadKindAudio) {
@@ -473,15 +472,19 @@ void VideoDownloader::parseOutputLine(const QString &line) {
         return;
     }
 
+    // A post-processor's output (e.g. the mp3 of "-x") is ours too while it is being written
+    static QRegularExpression ppDestRegex(R"(^\[(?:ExtractAudio|VideoConvertor|VideoRemuxer)\] Destination:\s+(.+))");
+    QRegularExpressionMatch ppMatch = ppDestRegex.match(line);
+    if (ppMatch.hasMatch()) {
+        addTempPath(ppMatch.captured(1).trimmed());
+        return;
+    }
+
     static QRegularExpression destRegex(R"(\[download\] Destination:\s+(.+))");
     QRegularExpressionMatch match = destRegex.match(line);
     if (match.hasMatch()) {
         m_finalPath = match.captured(1).trimmed();
-        if (m_finalPath.endsWith(".m4a") || m_finalPath.endsWith(".opus") || m_finalPath.endsWith(".mp3") ||
-            m_finalPath.contains(".f140") || m_finalPath.contains(".f249") || m_finalPath.contains(".f250") || m_finalPath.contains(".f251") ||
-            (m_videoTotalBytes > 0 && m_item.m_kind != DownloadKindAudio)) {
-            m_isAudioPhase = true;
-        }
+        noteDestination(m_finalPath, true);
         m_item.m_fileName = QFileInfo(m_finalPath).fileName();
         emit atTitleDetected(m_item.m_fileName);
         return;
@@ -532,6 +535,7 @@ void VideoDownloader::parseOutputLine(const QString &line) {
     QRegularExpressionMatch alreadyMatch = alreadyRegex.match(line);
     if (alreadyMatch.hasMatch()) {
         m_finalPath = alreadyMatch.captured(1).trimmed();
+        noteDestination(m_finalPath, false);  // counts as a finished phase; not ours to delete
         m_item.m_fileName = QFileInfo(m_finalPath).fileName();
         emit atTitleDetected(m_item.m_fileName);
         return;
@@ -541,6 +545,7 @@ void VideoDownloader::parseOutputLine(const QString &line) {
     match = mergeRegex.match(line);
     if (match.hasMatch()) {
         m_finalPath = match.captured(1).trimmed();
+        addTempPath(m_finalPath);  // an interrupted merge leaves "<name>.temp.<ext>"
         m_item.m_fileName = QFileInfo(m_finalPath).fileName();
         emit atTitleDetected(m_item.m_fileName);
         m_item.m_stage = tr("Ses ve görüntü birleştiriliyor...");
@@ -551,6 +556,29 @@ void VideoDownloader::parseOutputLine(const QString &line) {
     if (line.contains("[download] 100%")) {
         emit atProgressUpdated(100.0, m_item.m_totalBytes, m_item.m_totalBytes, "", "", tr("Tamamlanıyor..."));
     }
+}
+
+void VideoDownloader::addTempPath(const QString &path) {
+    const QString abs = QFileInfo(path).absoluteFilePath();
+    if (!abs.isEmpty() && PathUtils::isInsideDir(abs, m_item.m_directory) && !m_item.m_tempPaths.contains(abs)) {
+        m_item.m_tempPaths.append(abs);
+    }
+}
+
+bool VideoDownloader::noteDestination(const QString &path, bool ownFile) {
+    const QString abs = QFileInfo(path).absoluteFilePath();
+    if (abs.isEmpty()) return false;
+    if (ownFile) {
+        addTempPath(abs);
+    }
+    if (m_runDestinations.contains(abs)) return false;
+    m_runDestinations.append(abs);
+    // "bestvideo+bestaudio" downloads two files one after the other: the second one is the audio.
+    // A single-file format only ever reports one path, whatever the extension.
+    if (m_item.m_kind != DownloadKindAudio && m_runDestinations.size() >= 2) {
+        m_isAudioPhase = true;
+    }
+    return true;
 }
 
 void VideoDownloader::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus) {

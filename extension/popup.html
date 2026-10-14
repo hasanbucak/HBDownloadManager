@@ -15,7 +15,7 @@
   </header>
 
   <div id="offline" class="box hidden">
-    <span data-i18n="popupOfflineBox">The app is not running. Open HB Download Manager.</span>
+    <span id="offlineText" data-i18n="popupOfflineBox">The app is not running. Open HB Download Manager.</span>
     <button id="launch" class="hidden" data-i18n="popupLaunch">Open App</button>
   </div>
 
@@ -28,11 +28,11 @@
   <section>
     <div style="margin-bottom:6px;">
       <select id="videoQuality" style="width:100%; padding:6px 8px; border-radius:4px; background:#252526; color:#ffffff; border:1px solid #3c3c3c; font-size:12px; cursor:pointer;">
-        <option value="best">🌟 En Yüksek Kalite (1080p/4K MP4)</option>
-        <option value="1080">🎬 Full HD (1080p MP4)</option>
-        <option value="720">📺 HD (720p MP4)</option>
-        <option value="480">📱 Standart (480p MP4)</option>
-        <option value="audio">🎵 Sadece Ses (MP3)</option>
+        <option value="best" data-i18n="popupQBest">🌟 Best quality (1080p/4K MP4)</option>
+        <option value="1080" data-i18n="popupQ1080">🎬 Full HD (1080p MP4)</option>
+        <option value="720" data-i18n="popupQ720">📺 HD (720p MP4)</option>
+        <option value="480" data-i18n="popupQ480">📱 Standard (480p MP4)</option>
+        <option value="audio" data-i18n="popupQAudio">🎵 Audio only (MP3)</option>
       </select>
     </div>
     <button id="pageVideo" class="primary" data-i18n="popupPageVideo">Download video from this page (yt-dlp)</button>
@@ -54,6 +54,7 @@
   <details>
     <summary data-i18n="popupSettings">Settings</summary>
     <label><span data-i18n="popupPort">App port</span> <input type="number" id="port" min="1024" max="65535"></label>
+    <p id="portHint" class="hint hidden" data-i18n="popupPortInvalid">Enter a port between 1024 and 65535.</p>
     <label><span data-i18n="popupMinSize">Only capture downloads larger than (MB, 0 = all)</span> <input type="number" id="minSize" min="0"></label>
   </details>
   <script src="popup.js"></script>

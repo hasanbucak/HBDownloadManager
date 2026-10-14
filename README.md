@@ -44,6 +44,7 @@
 ### 5. 🌐 Çoklu Tarayıcı Entegrasyonu (WebExtension & Native Messaging)
 * **Google Chrome, Chromium, Brave, Microsoft Edge, Opera ve Mozilla Firefox** ile tam uyumlu WebExtension (Apple Safari deneysel / macOS şablonu).
 * `127.0.0.1:48213` üzerinde hafif yerel REST köprüsü üzerinden tarayıcı indirmelerini otomatik yakalar; oturum çerezlerini (cookies), referer ve user-agent başlıklarını uygulamaya aktarır.
+* **Resimler bilerek yakalanmaz:** Eklenti resim dosyalarını (png, jpg, gif, webp...) yakalamaz; bunları tarayıcı kendisi indirir. Bu bir tasarım tercihidir.
 * **Native Messaging Host:** Uygulama kapalıyken tarayıcıdan indirme başlatıldığında arka planda otomatik çalıştırılır (`com.hasanbucak.hbdownloadmanager`).
 
 ### 6. 🎨 Modern Dark-Mode IDM Arayüzü

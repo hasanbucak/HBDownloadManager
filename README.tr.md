@@ -85,6 +85,8 @@ make -f Makefile.host -j$(nproc)
 
 ## 🌐 Tarayıcı Eklentisinin Kurulumu
 
+> Not: Eklenti resim dosyalarını (png, jpg, gif, webp...) bilerek yakalamaz; bunları tarayıcı kendisi indirir.
+
 ### Google Chrome / Chromium / Brave / Edge:
 1. `chrome://extensions` adresine gidin.
 2. Sağ üstteki **Geliştirici modu (Developer mode)** anahtarını açın.

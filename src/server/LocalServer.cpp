@@ -413,6 +413,9 @@ void LocalServer::handleRequest(QTcpSocket *socket, const HttpRequest &req) {
             itObj["total"] = it.m_totalBytes;
             itObj["received"] = it.m_receivedBytes;
             itObj["stage"] = it.m_stage;
+            if (it.m_state == DownloadStateError && !it.m_errorMessage.isEmpty()) {
+                itObj["error"] = it.m_errorMessage;
+            }
             itemsArr.append(itObj);
         }
 
@@ -444,9 +447,12 @@ void LocalServer::handleRequest(QTcpSocket *socket, const HttpRequest &req) {
             return;
         }
 
-        DownloadItem item(url);
+        // Browser downloads follow the same settings as the ones added in the app
+        DownloadItem item(url, DownloadManager::instance().defaultDirectory());
+        item.m_requestedSegments = DownloadManager::instance().defaultSegments();
         if (obj.contains("filename") && !obj["filename"].toString().isEmpty()) {
             item.m_fileName = PathUtils::sanitizeFileName(obj["filename"].toString());
+            item.m_fileNameExplicit = true;  // the browser already resolved Content-Disposition
         }
         item.m_cookieHeader = obj["cookieHeader"].toString();
         item.m_cookies = obj["cookies"].toArray();
@@ -484,12 +490,17 @@ void LocalServer::handleRequest(QTcpSocket *socket, const HttpRequest &req) {
             }
         }
 
+        const int countBefore = DownloadManager::instance().items().size();
         QString id = DownloadManager::instance().addDownload(item, true);
-        emit atDownloadRequested(urlStr, item.m_fileName, obj["kind"].toString());
+        const bool duplicate = (DownloadManager::instance().items().size() == countBefore);
+        if (!duplicate) {
+            emit atDownloadRequested(urlStr, item.m_fileName, obj["kind"].toString());
+        }
 
         QJsonObject respObj;
         respObj["ok"] = true;
         respObj["id"] = id;
+        respObj["duplicate"] = duplicate;  // the same link is already being downloaded
         sendResponse(socket, 200, respObj, origin);
         return;
     }

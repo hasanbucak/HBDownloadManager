@@ -18,6 +18,8 @@ public:
     virtual ~MainWindow();
 
     void setServerStatus(bool listening, quint16 port, const QString &errorMsg = QString());
+    // Adds a download; when the same link is already in flight the existing row is selected instead
+    void submitDownload(const DownloadItem &item, bool startImmediately);
 
 public slots:
     void onUrlDetected(const QUrl &url);
@@ -41,6 +43,13 @@ private slots:
     void onItemAdded(const DownloadItem &item);
     void onItemUpdated(const DownloadItem &item);
     void onItemRemoved(const QString &id);
+    void updateActionStates();
+    void onAboutTriggered();
+    void onEnterPressed();
+
+signals:
+    // The window was hidden to the tray instead of closing (TrayManager shows a one-time hint)
+    void atHiddenToTray();
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -64,6 +73,11 @@ private:
     void updateToolWarnings();
     void saveWindowState();
     void restoreWindowState();
+    void setCellText(int row, int column, const QString &text, const QString &tooltip = QString());
+    void showDetails(const QString &id);
+    void openDownloadedFile(const QString &id);
+    void showDownloadFolder(const QString &id);
+    void selectRowById(const QString &id);
 
     QToolBar *m_toolBar;
     QAction *m_actNew;
@@ -85,5 +99,4 @@ private:
     int m_selectedCategory;
     QQueue<QUrl> m_pendingUrls;   // an empty QUrl means "blank new-download dialog"
     bool m_dialogOpen;
-    QMap<QString, QString> m_rowToIdMap;
 };

@@ -5,6 +5,7 @@
 #include <QFormLayout>
 #include <QHeaderView>
 #include <QGroupBox>
+#include <QMessageBox>
 
 DownloadDetailDialog::DownloadDetailDialog(const QString &downloadId, QWidget *parent)
     : QDialog(parent),
@@ -19,7 +20,8 @@ DownloadDetailDialog::DownloadDetailDialog(const QString &downloadId, QWidget *p
       m_segmentBarsContainer(NULL),
       m_segmentsTable(new QTableWidget(this)),
       m_pauseResumeBtn(new QPushButton(tr("Duraklat"), this)),
-      m_cancelBtn(new QPushButton(tr("İptal"), this)),
+      m_cancelBtn(new QPushButton(tr("İndirmeyi İptal Et"), this)),
+      m_closeBtn(new QPushButton(tr("Kapat"), this)),
       m_autoCloseCheck(new QCheckBox(tr("İndirme bittiğinde pencereyi kapat"), this)) {
     setupUi();
 
@@ -37,6 +39,7 @@ DownloadDetailDialog::DownloadDetailDialog(const QString &downloadId, QWidget *p
     });
     connect(m_pauseResumeBtn, SIGNAL(clicked()), this, SLOT(onPauseResumeClicked()));
     connect(m_cancelBtn, SIGNAL(clicked()), this, SLOT(onCancelClicked()));
+    connect(m_closeBtn, SIGNAL(clicked()), this, SLOT(reject()));
 }
 
 DownloadDetailDialog::~DownloadDetailDialog() {
@@ -103,6 +106,8 @@ void DownloadDetailDialog::setupUi() {
     bottomLayout->addStretch();
     bottomLayout->addWidget(m_pauseResumeBtn);
     bottomLayout->addWidget(m_cancelBtn);
+    bottomLayout->addWidget(m_closeBtn);
+    m_closeBtn->setDefault(true);
 
     mainLayout->addLayout(bottomLayout);
 }
@@ -123,6 +128,9 @@ void DownloadDetailDialog::updateUiWithItem(const DownloadItem &item) {
     m_urlLabel->setText(item.m_url.toString());
     if (item.m_state == DownloadStateError && !item.m_errorMessage.isEmpty()) {
         m_stateLabel->setText(QString("%1: %2").arg(item.stateString(), item.m_errorMessage));
+    } else if (item.isActive() && !item.m_stage.isEmpty() &&
+               (item.m_kind == DownloadKindVideo || item.m_kind == DownloadKindAudio)) {
+        m_stateLabel->setText(item.m_stage);
     } else {
         m_stateLabel->setText(item.stateString());
     }
@@ -131,16 +139,25 @@ void DownloadDetailDialog::updateUiWithItem(const DownloadItem &item) {
     m_etaLabel->setText(tr("Kalan Süre: %1").arg(item.formattedEta()));
 
     int pct = static_cast<int>(item.progress() * 100.0);
-    m_mainProgressBar->setValue(pct);
 
-    if (item.isActive()) {
+    if (item.isActive() || item.m_state == DownloadStateQueued) {
         m_pauseResumeBtn->setText(tr("Duraklat"));
         m_pauseResumeBtn->setEnabled(true);
-    } else if (item.m_state == DownloadStatePaused || item.m_state == DownloadStateError) {
-        m_pauseResumeBtn->setText(tr("Devam Et"));
+    } else if (item.m_state == DownloadStatePaused || item.m_state == DownloadStateError ||
+               item.m_state == DownloadStateCancelled) {
+        m_pauseResumeBtn->setText(item.m_state == DownloadStateError ? tr("Tekrar Dene") : tr("Devam Et"));
         m_pauseResumeBtn->setEnabled(true);
     } else {
         m_pauseResumeBtn->setEnabled(false);
+    }
+    m_cancelBtn->setEnabled(item.m_state != DownloadStateCompleted && item.m_state != DownloadStateCancelled);
+
+    // Unknown size while running: busy bar instead of a frozen 0%
+    if (item.isActive() && item.m_totalBytes <= 0 && item.progress() <= 0.0) {
+        m_mainProgressBar->setRange(0, 0);
+    } else {
+        m_mainProgressBar->setRange(0, 100);
+        m_mainProgressBar->setValue(pct);
     }
 
     // Segment Çubuklarını ve Tablosunu Güncelle
@@ -187,12 +204,23 @@ void DownloadDetailDialog::onPauseResumeClicked() {
 
     if (item->isActive()) {
         DownloadManager::instance().pauseDownload(m_downloadId);
-    } else if (item->m_state == DownloadStatePaused || item->m_state == DownloadStateError) {
+    } else if (item->m_state == DownloadStateQueued) {
+        DownloadManager::instance().pauseDownload(m_downloadId);
+    } else if (item->m_state == DownloadStatePaused || item->m_state == DownloadStateError ||
+               item->m_state == DownloadStateCancelled) {
         DownloadManager::instance().resumeDownload(m_downloadId);
     }
 }
 
 void DownloadDetailDialog::onCancelClicked() {
+    QMessageBox::StandardButton reply = QMessageBox::question(
+        this, tr("İndirmeyi İptal Et"),
+        tr("Bu indirme iptal edilsin mi?"),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (reply != QMessageBox::Yes) return;
+    // question() ran a nested loop: the item may have finished or vanished
+    DownloadItem *item = DownloadManager::instance().findItem(m_downloadId);
+    if (item == NULL || item->m_state == DownloadStateCompleted) return;
     DownloadManager::instance().cancelDownload(m_downloadId);
     reject();
 }

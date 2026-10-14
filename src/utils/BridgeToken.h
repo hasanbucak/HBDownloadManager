@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/file.h>
 #include <cerrno>
 
 // Shared by the app and the native messaging host: both must end up with the same token.
@@ -105,10 +106,28 @@ inline QString getOrCreateToken(const QString &overrideDir = QString()) {
     const QString finalPath = dir + "/bridge-token";
     const QByteArray finalPathLocal = finalPath.toLocal8Bit();
 
+    // Fast path: the usual case is a valid token that already exists
+    const QString ready = readTokenFile(finalPath);
+    if (!ready.isEmpty()) {
+        return ready;
+    }
+
+    // The app and the native host may both get here at the same moment. Without a lock one of
+    // them could take the other's freshly linked token for a broken file and unlink it, and the
+    // two would end up with different tokens. flock() also serialises threads (separate open()s).
+    const QByteArray lockPath = (dir + "/.bridge-token.lock").toLocal8Bit();
+    const int lockFd = ::open(lockPath.constData(), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (lockFd >= 0) {
+        while (::flock(lockFd, LOCK_EX) != 0 && errno == EINTR) {
+        }
+    }
+
+    QString token;
     for (int attempt = 0; attempt < 3; ++attempt) {
         const QString existing = readTokenFile(finalPath);
         if (!existing.isEmpty()) {
-            return existing;
+            token = existing;
+            break;  // never return here: the lock below must be released
         }
 
         struct stat st;
@@ -155,7 +174,14 @@ inline QString getOrCreateToken(const QString &overrideDir = QString()) {
         }
     }
 
-    return readTokenFile(finalPath);
+    if (token.isEmpty()) {
+        token = readTokenFile(finalPath);
+    }
+    if (lockFd >= 0) {
+        ::flock(lockFd, LOCK_UN);
+        ::close(lockFd);
+    }
+    return token;
 }
 
 } // namespace BridgeToken

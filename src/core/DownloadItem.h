@@ -9,6 +9,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QUuid>
+#include <QStringList>
 
 enum DownloadKind {
     DownloadKindUnspecified = -1,
@@ -64,6 +65,13 @@ public:
     QString m_quality;
     QUrl m_originalUrl;
     QString m_etag;
+    // True when the user or the browser chose the name; otherwise the server's
+    // Content-Disposition / final redirect name may replace the URL-derived one at probe time
+    bool m_fileNameExplicit;
+    // Files yt-dlp wrote for this item (format files, merge output): removed with the item
+    QStringList m_tempPaths;
+    // Set at shutdown for items that were running or queued: they are queued again at start-up
+    bool m_resumeOnStart;
 
     // Çalışma zamanı (non-persistent) alanlar
     double m_speed;

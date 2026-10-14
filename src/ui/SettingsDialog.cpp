@@ -21,7 +21,7 @@ SettingsDialog::SettingsDialog(QWidget *parent)
       m_segmentsSpin(new QSpinBox(this)),
       m_concurrentSpin(new QSpinBox(this)),
       m_portSpin(new QSpinBox(this)),
-      m_clipboardCheck(new QCheckBox(tr("Panodaki bağlantıları izle ve indirme öner"), this)),
+      m_clipboardCheck(new QCheckBox(tr("Panodaki bağlantıları izle: arşiv, program, video, ses, pdf/belge"), this)),
       m_installBtn(new QPushButton(tr("Tarayıcı Eklenti Köprüsünü Kur (1-Tık Kurulum)"), this)),
       m_okBtn(new QPushButton(tr("Kaydet"), this)),
       m_cancelBtn(new QPushButton(tr("İptal"), this)),
@@ -47,7 +47,7 @@ SettingsDialog::~SettingsDialog() {
 
 void SettingsDialog::setupUi() {
     setWindowTitle(tr("Ayarlar ve Tarayıcı Entegrasyonu"));
-    resize(520, 420);
+    resize(560, 480);
 
     m_segmentsSpin->setRange(1, 16);
     m_concurrentSpin->setRange(1, 10);
@@ -69,6 +69,9 @@ void SettingsDialog::setupUi() {
     QLabel *portNote = new QLabel(tr("Port değişikliği uygulama yeniden başlatıldıktan sonra geçerli olur. "
                                      "Tarayıcı eklentisi varsayılan olarak 48213 portunu kullanır."), this);
     portNote->setWordWrap(true);
+    // The wrapped label was clipped: reserve room for three lines regardless of the wrap width
+    portNote->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::MinimumExpanding);
+    portNote->setMinimumHeight(portNote->fontMetrics().lineSpacing() * 3 + 4);
     form->addRow(portNote);
 
     form->addRow(m_clipboardCheck);

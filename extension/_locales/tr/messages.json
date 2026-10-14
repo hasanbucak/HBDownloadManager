@@ -143,5 +143,134 @@
   },
   "popupAutoLaunch": {
     "message": "İndirme gelince uygulamayı aç"
+  },
+  "notifMismatchBody": {
+    "message": "Port $V$: HB Download Manager doğrulanamadı.",
+    "placeholders": {
+      "v": {
+        "content": "$1"
+      }
+    }
+  },
+  "errOffline": {
+    "message": "Uygulama çalışmıyor"
+  },
+  "errUnverified": {
+    "message": "Uygulama doğrulanamadı"
+  },
+  "errMismatch": {
+    "message": "Uygulama doğrulanamadı (köprü anahtarı uyuşmuyor)"
+  },
+  "errApp": {
+    "message": "Uygulama isteği reddetti"
+  },
+  "errNetwork": {
+    "message": "Uygulamaya ulaşılamadı"
+  },
+  "errNoAnswer": {
+    "message": "Eklenti yanıt vermedi"
+  },
+  "msgDuplicate": {
+    "message": "Zaten indiriliyor"
+  },
+  "popupAuthMismatch": {
+    "message": "Uygulama bulundu ama doğrulanamadı: uygulamada Ayarlar > Install Browser Extension Bridge çalıştırın."
+  },
+  "popupUnverified": {
+    "message": "Uygulama doğrulanamadı"
+  },
+  "popupQueued": {
+    "message": "Sırada"
+  },
+  "popupPortInvalid": {
+    "message": "1024 ile 65535 arasında bir port girin."
+  },
+  "popupQBest": {
+    "message": "🌟 En Yüksek Kalite (1080p/4K MP4)"
+  },
+  "popupQ1080": {
+    "message": "🎬 Full HD (1080p MP4)"
+  },
+  "popupQ720": {
+    "message": "📺 HD (720p MP4)"
+  },
+  "popupQ480": {
+    "message": "📱 Standart (480p MP4)"
+  },
+  "popupQAudio": {
+    "message": "🎵 Sadece Ses (MP3)"
+  },
+  "ovLabel": {
+    "message": "Bu Videoyu İndir"
+  },
+  "ovMainTitle": {
+    "message": "Bu videoyu HB Download Manager ile indir"
+  },
+  "ovQualityTitle": {
+    "message": "Kalite Seçenekleri (4K, 1440p, 1080p, 720p, MP3)"
+  },
+  "ovSending": {
+    "message": "⏳ Gönderiliyor..."
+  },
+  "ovSentVideo": {
+    "message": "✓ İndirmeye Gönderildi!"
+  },
+  "ovSentAudio": {
+    "message": "✓ Ses İndiriliyor..."
+  },
+  "ovCopied": {
+    "message": "✓ Bağlantı Kopyalandı!"
+  },
+  "qBest": {
+    "message": "En Yüksek Kalite"
+  },
+  "qBestWith": {
+    "message": "En Yüksek Kalite ($B$)",
+    "placeholders": {
+      "b": {
+        "content": "$1"
+      }
+    }
+  },
+  "qAuto": {
+    "message": "Otomatik"
+  },
+  "qFullHd": {
+    "message": "Full HD Kalite"
+  },
+  "qHd": {
+    "message": "HD Kalite"
+  },
+  "qStandard": {
+    "message": "Standart Kalite"
+  },
+  "qLow": {
+    "message": "Düşük Kalite"
+  },
+  "qOther": {
+    "message": "$H$p Kalite",
+    "placeholders": {
+      "h": {
+        "content": "$1"
+      }
+    }
+  },
+  "qAudioOnly": {
+    "message": "Sadece Sesi İndir"
+  },
+  "qCopyLink": {
+    "message": "Video Bağlantısını Kopyala"
+  },
+  "xBtnLabel": {
+    "message": "İndir"
+  },
+  "xBtnTitle": {
+    "message": "Videoyu HB Download Manager ile İndir"
+  },
+  "xBtnSent": {
+    "message": "Gönderildi"
+  },
+  "xBtnFailed": {
+    "message": "Başarısız"
   }
 }
